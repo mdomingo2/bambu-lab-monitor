@@ -15,6 +15,7 @@ import ftplib
 import io
 import logging
 import os
+import re
 import ssl
 import subprocess
 import tempfile
@@ -359,6 +360,21 @@ def _fetch_thumbnail_sync(
         f"[thumbnail] {ip} subtask={subtask_name!r} "
         f"cover={cover_file!r} gcode={gcode_file!r}"
     )
+
+    # Strategy 0: /data/Metadata/plate_N.gcode → fetch plate_N.png directly.
+    # H2D and P1S report this path for cloud-mode prints.  The printer stores
+    # the plate thumbnails as bare PNG/JPEG files at the same Metadata path.
+    plate_match = re.match(r".*/plate_(\d+)\.gcode$", gcode_file or "", re.IGNORECASE)
+    if plate_match:
+        plate = plate_match.group(1)
+        for thumb_path in [
+            f"/data/Metadata/plate_{plate}.png",
+            f"/data/Metadata/plate_{plate}_small.png",
+        ]:
+            img = _ftps_download(ip, access_code, thumb_path, timeout=10)
+            if img and img[:4] in (b"\x89PNG", b"\xff\xd8\xff"):
+                logger.info(f"[thumbnail] hit via strategy 0 (plate png): {thumb_path}")
+                return _cache(img)
 
     # Strategy 1a: direct .3mf download (A1 / P1S)
     for name in filter(None, [subtask_name, gcode_file]):
