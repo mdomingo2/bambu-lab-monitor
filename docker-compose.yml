@@ -1,0 +1,40 @@
+services:
+  go2rtc:
+    image: alexxit/go2rtc
+    ports:
+      - "1984:1984"
+      - "8555:8555/tcp"     # WebRTC media port — must be reachable from browser
+    volumes:
+      - ./go2rtc:/config
+    restart: unless-stopped
+
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - bambu_data:/app/data
+    environment:
+      - DATABASE_URL=sqlite:////app/data/bambu.db
+      - GO2RTC_URL=http://go2rtc:1984
+    restart: unless-stopped
+    depends_on:
+      - go2rtc
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/printers')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "80:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  bambu_data:
