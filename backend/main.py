@@ -678,6 +678,32 @@ async def update_settings(data: SettingsUpdate):
 # Thumbnails
 # ---------------------------------------------------------------------------
 
+async def _go2rtc_snapshot(printer_id: str) -> bytes | None:
+    """Grab a single JPEG frame from go2rtc for the printer's camera stream.
+
+    Used as a thumbnail fallback for cloud-mode prints where the .3mf is not
+    accessible via FTPS.  Only called when lan_mode is True (RTSP reachable).
+    The result is cached in thumbnail_cache so subsequent requests are instant.
+    """
+    stream_name = f"bambu_{printer_id}"
+    url = f"{GO2RTC_URL}/api/frame.jpeg?src={stream_name}"
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(url)
+            if resp.status_code == 200 and len(resp.content) > 1000:
+                logger.info(
+                    f"[thumbnail] camera snapshot for {stream_name}: {len(resp.content)}B"
+                )
+                return resp.content
+            logger.debug(
+                f"[thumbnail] go2rtc snapshot {stream_name}: "
+                f"status={resp.status_code} size={len(resp.content)}B"
+            )
+    except Exception as exc:
+        logger.debug(f"[thumbnail] go2rtc snapshot failed for {stream_name}: {exc}")
+    return None
+
+
 @app.get("/api/printers/{printer_id}/thumbnail")
 async def get_thumbnail(printer_id: str):
     p = db.get_printer(printer_id)
@@ -695,6 +721,14 @@ async def get_thumbnail(printer_id: str):
     data = await asyncio.get_running_loop().run_in_executor(
         None, _fetch_thumbnail_sync, printer_id, p.ip, p.access_code, cover, gcode, subtask
     )
+
+    # FTPS thumbnail unavailable — fall back to a live camera snapshot for
+    # printers that have LAN Mode enabled (go2rtc stream is reachable).
+    if not data and p.lan_mode:
+        data = await _go2rtc_snapshot(printer_id)
+        if data:
+            thumbnail_cache[printer_id] = data   # cache so next request is instant
+
     if not data:
         raise HTTPException(status_code=404, detail="Thumbnail unavailable")
 
