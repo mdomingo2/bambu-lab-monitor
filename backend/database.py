@@ -42,10 +42,12 @@ def _migrate() -> None:
     """
     with engine.connect() as conn:
         # lan_mode — added to support per-printer camera visibility toggle.
-        # Default 1 (True) so existing printers keep showing the camera button.
+        # A1/P1S default to 0: A1 cameras are cloud-only; P1S requires LAN
+        # Mode to be explicitly enabled on the printer before cameras work.
         cols = [row[1] for row in conn.execute(text("PRAGMA table_info(printer)"))]
         if "lan_mode" not in cols:
             conn.execute(text("ALTER TABLE printer ADD COLUMN lan_mode INTEGER NOT NULL DEFAULT 1"))
+            conn.execute(text("UPDATE printer SET lan_mode = 0 WHERE model IN ('A1', 'P1S')"))
             conn.commit()
 
 

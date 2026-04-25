@@ -5,9 +5,11 @@ import { Dialog } from '../components/ui/Dialog'
 import { StatusBadge } from '../components/StatusBadge'
 
 const MODELS = ['A1', 'P1S', 'P2S', 'H2D']
-// A1/A1 mini do not expose an RTSP stream over LAN — camera is cloud-only.
-const MODEL_HAS_LAN_CAMERA = { A1: false, P1S: true, P2S: true, H2D: true }
-const EMPTY_FORM = { name: '', model: 'P1S', ip: '', serial: '', access_code: '', lan_mode: true }
+// Models that default lan_mode=false:
+//   A1  — cameras are cloud-only, RTSP on port 322 is not supported
+//   P1S — LAN Mode must be explicitly enabled on the printer; off by default
+const MODEL_LAN_DEFAULT = { A1: false, P1S: false, P2S: true, H2D: true }
+const EMPTY_FORM = { name: '', model: 'P1S', ip: '', serial: '', access_code: '', lan_mode: false }
 
 async function apiRequest(url, options) {
   const res = await fetch(url, options)
@@ -33,13 +35,13 @@ function PrinterForm({ initial = EMPTY_FORM, onSave, onCancel, saving, error }) 
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }))
   const valid = form.name.trim() && form.ip.trim() && form.serial.trim() && form.access_code.trim()
 
-  // When model changes, keep lan_mode in sync — A1 can never use LAN camera.
+  // When model changes, reset lan_mode to the model's default.
   const handleModelChange = (e) => {
     const model = e.target.value
     setForm((f) => ({
       ...f,
       model,
-      lan_mode: model === 'A1' ? false : f.lan_mode,
+      lan_mode: MODEL_LAN_DEFAULT[model] ?? true,
     }))
   }
 
