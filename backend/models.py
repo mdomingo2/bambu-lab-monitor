@@ -33,6 +33,9 @@ class Printer(SQLModel, table=True):
     ip: str
     serial: str
     access_code: str    # shown on printer screen under Settings → Network
+    lan_mode: bool = Field(default=True)
+    # lan_mode=True  → camera button is shown; go2rtc connects via RTSP on port 322
+    # lan_mode=False → camera button is hidden; A1/A1 mini or LAN Mode off on printer
 
 
 class FarmSettings(SQLModel, table=True):
@@ -73,6 +76,7 @@ class PrinterCreate(BaseModel):
     ip: str
     serial: str
     access_code: str
+    lan_mode: bool = True
 
 
 class PrinterUpdate(BaseModel):
@@ -82,6 +86,7 @@ class PrinterUpdate(BaseModel):
     ip: Optional[str] = None
     serial: Optional[str] = None
     access_code: Optional[str] = None
+    lan_mode: Optional[bool] = None
 
 
 class SettingsUpdate(BaseModel):

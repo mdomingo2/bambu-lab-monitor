@@ -1,11 +1,13 @@
 import { useState } from 'react'
-import { PlusCircle, Pencil, Trash2, AlertCircle, Check } from 'lucide-react'
+import { PlusCircle, Pencil, Trash2, AlertCircle, Check, Video } from 'lucide-react'
 import { usePrinterStore } from '../store/printerStore'
 import { Dialog } from '../components/ui/Dialog'
 import { StatusBadge } from '../components/StatusBadge'
 
 const MODELS = ['A1', 'P1S', 'P2S', 'H2D']
-const EMPTY_FORM = { name: '', model: 'P1S', ip: '', serial: '', access_code: '' }
+// A1/A1 mini do not expose an RTSP stream over LAN — camera is cloud-only.
+const MODEL_HAS_LAN_CAMERA = { A1: false, P1S: true, P2S: true, H2D: true }
+const EMPTY_FORM = { name: '', model: 'P1S', ip: '', serial: '', access_code: '', lan_mode: true }
 
 async function apiRequest(url, options) {
   const res = await fetch(url, options)
@@ -31,6 +33,18 @@ function PrinterForm({ initial = EMPTY_FORM, onSave, onCancel, saving, error }) 
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }))
   const valid = form.name.trim() && form.ip.trim() && form.serial.trim() && form.access_code.trim()
 
+  // When model changes, keep lan_mode in sync — A1 can never use LAN camera.
+  const handleModelChange = (e) => {
+    const model = e.target.value
+    setForm((f) => ({
+      ...f,
+      model,
+      lan_mode: model === 'A1' ? false : f.lan_mode,
+    }))
+  }
+
+  const isA1 = form.model === 'A1'
+
   return (
     <div className="flex flex-col gap-4">
       <ErrorBanner error={error} />
@@ -42,7 +56,7 @@ function PrinterForm({ initial = EMPTY_FORM, onSave, onCancel, saving, error }) 
           </div>
           <div>
             <label className="label">Model</label>
-            <select className="input" value={form.model} onChange={set('model')}>
+            <select className="input" value={form.model} onChange={handleModelChange}>
               {MODELS.map((m) => <option key={m}>{m}</option>)}
             </select>
           </div>
@@ -74,6 +88,40 @@ function PrinterForm({ initial = EMPTY_FORM, onSave, onCancel, saving, error }) 
           <p className="text-xs text-zinc-400 mt-1">
             Found on the printer touchscreen under Settings → Network
           </p>
+        </div>
+
+        {/* LAN Mode toggle */}
+        <div className={`flex items-start gap-3 p-3 rounded-lg border ${
+          isA1
+            ? 'bg-zinc-50 dark:bg-zinc-800/30 border-zinc-200 dark:border-zinc-700 opacity-60'
+            : form.lan_mode
+              ? 'bg-emerald-50 dark:bg-emerald-900/10 border-emerald-200 dark:border-emerald-800'
+              : 'bg-zinc-50 dark:bg-zinc-800/50 border-zinc-200 dark:border-zinc-700'
+        }`}>
+          <input
+            type="checkbox"
+            id="lan_mode"
+            checked={form.lan_mode}
+            disabled={isA1}
+            onChange={(e) => setForm((f) => ({ ...f, lan_mode: e.target.checked }))}
+            className="mt-0.5 w-4 h-4 accent-emerald-500 cursor-pointer disabled:cursor-not-allowed"
+          />
+          <div className="min-w-0 flex-1">
+            <label
+              htmlFor="lan_mode"
+              className={`flex items-center gap-1.5 text-sm font-medium ${isA1 ? 'text-zinc-400 cursor-not-allowed' : 'text-zinc-800 dark:text-zinc-200 cursor-pointer'}`}
+            >
+              <Video size={13} />
+              LAN Mode enabled
+            </label>
+            <p className="text-xs text-zinc-400 dark:text-zinc-500 mt-0.5 leading-relaxed">
+              {isA1
+                ? 'A1 / A1 mini cameras are cloud-only — live camera is not available regardless of LAN Mode.'
+                : form.lan_mode
+                  ? 'Live camera is enabled. Make sure LAN Mode is on under Settings → Network on the printer.'
+                  : 'Live camera button is hidden. Enable LAN Mode on the printer first, then check this box.'}
+            </p>
+          </div>
         </div>
 
         <div className="flex justify-end gap-3 pt-2 border-t border-zinc-200 dark:border-zinc-800">

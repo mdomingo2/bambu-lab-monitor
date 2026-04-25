@@ -246,14 +246,16 @@ export function PrinterCard({ printer, status, dismissed = [] }) {
           >
             <Lightbulb size={12} className={lightOn ? '' : 'opacity-50'} />
           </button>
-          {/* Camera */}
-          <button
-            onClick={(e) => { e.stopPropagation(); setShowCamera(true) }}
-            title="Live camera"
-            className="p-0.5 rounded text-zinc-400 hover:text-brand-500 dark:hover:text-brand-400 transition-colors"
-          >
-            <Video size={12} />
-          </button>
+          {/* Camera — only shown when LAN Mode is enabled for this printer */}
+          {printer.lan_mode !== false && (
+            <button
+              onClick={(e) => { e.stopPropagation(); setShowCamera(true) }}
+              title="Live camera"
+              className="p-0.5 rounded text-zinc-400 hover:text-brand-500 dark:hover:text-brand-400 transition-colors"
+            >
+              <Video size={12} />
+            </button>
+          )}
         </div>
       </div>
     </>

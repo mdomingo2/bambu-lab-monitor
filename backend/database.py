@@ -10,6 +10,7 @@ but SQLModel/SQLAlchemy handles concurrent reads safely).
 import os
 from datetime import datetime, timezone
 
+from sqlalchemy import text
 from sqlmodel import SQLModel, Session, create_engine, select
 
 from models import Printer, FarmSettings, PrintJob, DismissedAlert
@@ -28,8 +29,24 @@ DEFAULT_SETTINGS: dict[str, str] = {"farm_name": "Print Farm"}
 # ---------------------------------------------------------------------------
 
 def init_db() -> None:
-    """Create all tables if they don't already exist."""
+    """Create all tables if they don't already exist, then run migrations."""
     SQLModel.metadata.create_all(engine)
+    _migrate()
+
+
+def _migrate() -> None:
+    """Forward-only column migrations for existing databases.
+
+    SQLModel/create_all only creates missing *tables*, not missing *columns*.
+    Add any new Printer/etc. columns here so existing installs upgrade cleanly.
+    """
+    with engine.connect() as conn:
+        # lan_mode — added to support per-printer camera visibility toggle.
+        # Default 1 (True) so existing printers keep showing the camera button.
+        cols = [row[1] for row in conn.execute(text("PRAGMA table_info(printer)"))]
+        if "lan_mode" not in cols:
+            conn.execute(text("ALTER TABLE printer ADD COLUMN lan_mode INTEGER NOT NULL DEFAULT 1"))
+            conn.commit()
 
 
 # ---------------------------------------------------------------------------

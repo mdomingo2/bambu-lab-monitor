@@ -416,12 +416,15 @@ export function PrinterDetail() {
             <Lightbulb size={14} className={lightOn ? '' : 'opacity-40'} />
             {lightOn ? 'Light On' : 'Light Off'}
           </button>
-          <button
-            onClick={() => setShowCamera(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 hover:bg-brand-50 hover:text-brand-600 dark:hover:bg-brand-900/20 dark:hover:text-brand-400 border border-zinc-200 dark:border-zinc-700 transition-colors"
-          >
-            <Video size={14} /> Camera
-          </button>
+          {/* Camera — only shown when LAN Mode is enabled for this printer */}
+          {printer.lan_mode !== false && (
+            <button
+              onClick={() => setShowCamera(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 hover:bg-brand-50 hover:text-brand-600 dark:hover:bg-brand-900/20 dark:hover:text-brand-400 border border-zinc-200 dark:border-zinc-700 transition-colors"
+            >
+              <Video size={14} /> Camera
+            </button>
+          )}
         </div>
       </div>
 
