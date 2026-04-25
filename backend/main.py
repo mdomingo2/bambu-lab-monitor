@@ -384,10 +384,26 @@ def _fetch_thumbnail_sync(
             if img and img[:4] in (b"\x89PNG", b"\xff\xd8\xff"):
                 logger.info(f"[thumbnail] hit via strategy 0 (plate png): {thumb_path}")
                 return _cache(img)
-        # Cloud print — thumbnail not accessible via FTPS (stored in printer
-        # internal memory, not on SD card).  Return None rather than falling
-        # through to the SD scan which would return the wrong file's thumbnail.
-        logger.info(f"[thumbnail] strategy 0: cloud print on {ip}, no thumbnail via FTPS")
+
+        # Strategy 0b: named cloud print.
+        # When the user gives the job a name in Bambu Studio before sending,
+        # the .3mf is stored at the SD card root even for cloud prints.
+        # gcode_file is still /data/Metadata/plate_N.gcode, but subtask_name
+        # is the real filename.  Slicer-profile descriptions always contain
+        # commas ("0.16mm layer, 2 walls, 8% infill") — real filenames don't.
+        if subtask_name and "," not in subtask_name and not subtask_name.lower().endswith(".gcode"):
+            for ext in (".gcode.3mf", ".3mf"):
+                raw = _ftps_download(ip, access_code, f"/{subtask_name}{ext}", timeout=20)
+                if raw:
+                    img = _extract_thumbnail_from_3mf(raw)
+                    if img:
+                        logger.info(f"[thumbnail] hit via strategy 0b (named cloud): /{subtask_name}{ext}")
+                        return _cache(img)
+
+        # Unnamed cloud print — thumbnail lives in printer internal memory
+        # (/data/Metadata/) which is not accessible over FTPS.  Return None
+        # rather than falling through to the SD scan (would return wrong file).
+        logger.info(f"[thumbnail] strategy 0: unnamed cloud print on {ip}, no thumbnail via FTPS")
         return None
 
     # Strategy 1a: direct .3mf download (A1 / P1S)
