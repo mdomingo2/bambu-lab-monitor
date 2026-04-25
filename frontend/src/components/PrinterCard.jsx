@@ -39,12 +39,15 @@ function TempCell({ label, current, target }) {
   const t = target  ?? 0
   const isHeating = t > 0 && c < t - 2
   const atTemp    = t > 0 && c >= t - 2
+  const isCooling = t === 0 && c > 40   // target off but still warm
 
   const valueClass = isHeating
     ? 'text-red-500'
     : atTemp
       ? 'text-emerald-500'
-      : 'text-zinc-700 dark:text-zinc-300'
+      : isCooling
+        ? 'text-blue-400'
+        : 'text-zinc-700 dark:text-zinc-300'
 
   return (
     <div className="flex flex-col gap-0.5 min-w-0">

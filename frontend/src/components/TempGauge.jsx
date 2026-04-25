@@ -2,7 +2,8 @@ import { clsx } from 'clsx'
 
 export function TempGauge({ label, current, target, icon: Icon }) {
   const isHeating = target > 0 && current < target - 2
-  const atTemp = target > 0 && current >= target - 2
+  const atTemp    = target > 0 && current >= target - 2
+  const isCooling = target === 0 && current > 40   // target off but still warm
 
   return (
     <div className="flex flex-col gap-1">
@@ -14,8 +15,9 @@ export function TempGauge({ label, current, target, icon: Icon }) {
         <span className={clsx(
           'text-lg font-semibold tabular-nums',
           isHeating && 'text-red-500 animate-pulse-slow',
-          atTemp && 'text-emerald-500',
-          !isHeating && !atTemp && 'text-zinc-700 dark:text-zinc-300'
+          atTemp    && 'text-emerald-500',
+          isCooling && 'text-blue-400',
+          !isHeating && !atTemp && !isCooling && 'text-zinc-700 dark:text-zinc-300'
         )}>
           {current.toFixed(0)}°
         </span>
