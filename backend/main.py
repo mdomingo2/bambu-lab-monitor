@@ -363,18 +363,32 @@ def _fetch_thumbnail_sync(
 
     # Strategy 0: /data/Metadata/plate_N.gcode → fetch plate_N.png directly.
     # H2D and P1S report this path for cloud-mode prints.  The printer stores
-    # the plate thumbnails as bare PNG/JPEG files at the same Metadata path.
+    # the plate thumbnails as PNG files; the internal /data/ path isn't
+    # reachable via FTPS, so we also try root-relative variants.
+    # IMPORTANT: if this is clearly a cloud-internal path and no thumbnail is
+    # found, we return None immediately rather than falling through to the SD
+    # card scan — that scan reliably returns the *wrong* thumbnail because the
+    # currently-printing file is not on the SD card at all.
     plate_match = re.match(r".*/plate_(\d+)\.gcode$", gcode_file or "", re.IGNORECASE)
     if plate_match:
         plate = plate_match.group(1)
-        for thumb_path in [
+        candidate_paths = [
             f"/data/Metadata/plate_{plate}.png",
             f"/data/Metadata/plate_{plate}_small.png",
-        ]:
+            f"/Metadata/plate_{plate}.png",
+            f"/Metadata/plate_{plate}_small.png",
+            f"/cache/Metadata/plate_{plate}.png",
+        ]
+        for thumb_path in candidate_paths:
             img = _ftps_download(ip, access_code, thumb_path, timeout=10)
             if img and img[:4] in (b"\x89PNG", b"\xff\xd8\xff"):
                 logger.info(f"[thumbnail] hit via strategy 0 (plate png): {thumb_path}")
                 return _cache(img)
+        # Cloud print — thumbnail not accessible via FTPS (stored in printer
+        # internal memory, not on SD card).  Return None rather than falling
+        # through to the SD scan which would return the wrong file's thumbnail.
+        logger.info(f"[thumbnail] strategy 0: cloud print on {ip}, no thumbnail via FTPS")
+        return None
 
     # Strategy 1a: direct .3mf download (A1 / P1S)
     for name in filter(None, [subtask_name, gcode_file]):
