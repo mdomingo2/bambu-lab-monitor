@@ -89,7 +89,24 @@ else
   warn "Service template not found at ${SERVICE_SRC}. Skipping systemd setup."
 fi
 
-# ── 7. Build and start the stack ────────────────────────────
+# ── 7. Configure HOST_IP for WebRTC camera streams ──────────
+LOCAL_IP=$(hostname -I | awk '{print $1}')
+ENV_FILE="${APP_DIR}/.env"
+
+if [[ -f "${ENV_FILE}" ]] && grep -q "^HOST_IP=" "${ENV_FILE}"; then
+  EXISTING_IP=$(grep "^HOST_IP=" "${ENV_FILE}" | cut -d= -f2)
+  if [[ "${EXISTING_IP}" == "${LOCAL_IP}" ]]; then
+    info "HOST_IP already set to ${LOCAL_IP} in .env"
+  else
+    info "Updating HOST_IP in .env: ${EXISTING_IP} → ${LOCAL_IP}"
+    sed -i "s|^HOST_IP=.*|HOST_IP=${LOCAL_IP}|" "${ENV_FILE}"
+  fi
+else
+  info "Writing HOST_IP=${LOCAL_IP} to .env (needed for WebRTC camera streams)"
+  echo "HOST_IP=${LOCAL_IP}" >> "${ENV_FILE}"
+fi
+
+# ── 8. Build and start the stack ────────────────────────────
 info "Building Docker images (this takes a few minutes on first run)…"
 # Use sg to run docker in the docker group without a full re-login
 sg docker -c "docker compose -f '${APP_DIR}/docker-compose.yml' build"
@@ -97,8 +114,7 @@ sg docker -c "docker compose -f '${APP_DIR}/docker-compose.yml' build"
 info "Starting services…"
 sg docker -c "docker compose -f '${APP_DIR}/docker-compose.yml' up -d"
 
-# ── 8. Done ──────────────────────────────────────────────────
-LOCAL_IP=$(hostname -I | awk '{print $1}')
+# ── 9. Done ──────────────────────────────────────────────────
 echo ""
 echo -e "${GREEN}╔══════════════════════════════════════════════════════╗${NC}"
 echo -e "${GREEN}║        Bambu Lab Monitor installed successfully!      ║${NC}"

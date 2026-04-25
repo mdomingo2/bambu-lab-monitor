@@ -6,6 +6,14 @@ services:
       - "8555:8555/tcp"     # WebRTC media port — must be reachable from browser
     volumes:
       - ./go2rtc:/config
+    environment:
+      # HOST_IP: LAN IP of the machine running Docker.  The browser opens a
+      # direct UDP/TCP connection to HOST_IP:8555 for the WebRTC video stream,
+      # so this must be the IP your browser can actually reach.
+      # Set it in a .env file alongside docker-compose.yml:
+      #   echo "HOST_IP=192.168.1.50" > .env
+      # The install.sh script on Raspberry Pi sets this automatically.
+      - HOST_IP=${HOST_IP:-127.0.0.1}
     restart: unless-stopped
 
   backend:
