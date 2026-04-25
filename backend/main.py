@@ -320,6 +320,7 @@ def _ftps_list_3mf(ip: str, access_code: str) -> list[str]:
 
 
 def _fetch_thumbnail_sync(
+    printer_id: str,
     ip: str,
     access_code: str,
     cover_file: str,
@@ -343,15 +344,15 @@ def _fetch_thumbnail_sync(
 
     4.  Explicit cover_file path from MQTT (pre-rendered JPEG/PNG).
 
-    Results are cached in memory by (ip, job identifier) so repeated
-    requests within a print job are fast.
+    Cache key is printer_id (one slot per printer).  The cache is cleared
+    by on_printer_status() whenever current_file changes, so every new job
+    always triggers a fresh fetch regardless of filename reuse.
     """
-    cache_key = f"{ip}:{subtask_name or gcode_file or cover_file}"
-    if cache_key in thumbnail_cache:
-        return thumbnail_cache[cache_key]
+    if printer_id in thumbnail_cache:
+        return thumbnail_cache[printer_id]
 
     def _cache(data: bytes) -> bytes:
-        thumbnail_cache[cache_key] = data
+        thumbnail_cache[printer_id] = data
         return data
 
     logger.info(
@@ -475,6 +476,11 @@ def on_printer_status(status: PrinterStatus) -> None:
     curr_state = status.gcode_state
 
     loop = app.state.loop
+
+    # Clear thumbnail cache whenever the active file changes so the next
+    # request always fetches a fresh image for the new job.
+    if prev.get("current_file") != status.current_file:
+        thumbnail_cache.pop(status.printer_id, None)
 
     # Print started
     if prev_state != "RUNNING" and curr_state == "RUNNING":
@@ -641,7 +647,7 @@ async def get_thumbnail(printer_id: str):
         raise HTTPException(status_code=404, detail="No print file available")
 
     data = await asyncio.get_running_loop().run_in_executor(
-        None, _fetch_thumbnail_sync, p.ip, p.access_code, cover, gcode, subtask
+        None, _fetch_thumbnail_sync, printer_id, p.ip, p.access_code, cover, gcode, subtask
     )
     if not data:
         raise HTTPException(status_code=404, detail="Thumbnail unavailable")
