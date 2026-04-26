@@ -15,82 +15,21 @@ import { AMSDisplay } from './AMSDisplay'
 import { CameraModal } from './CameraModal'
 import { WifiStrength } from './ui/WifiStrength'
 import { PrinterIcon } from './ui/PrinterIcon'
+import { IdlePlaceholder } from './ui/IdlePlaceholder'
+import { useUnitStore } from '../store/unitStore'
+import { formatTemp } from '../utils/temperature'
+import { formatTime } from '../utils/time'
+import { CHAMBER_TEMP_MIN, MODEL_ACCENT } from '../utils/constants'
+import { useThumbnailUrl } from '../hooks/useThumbnailUrl'
 
-// Chamber temps below this threshold are noise (no enclosure / cloud mode).
-const CHAMBER_TEMP_MIN = 15
-
-/** Placeholder shown on idle/finished cards in place of a print thumbnail. */
-function IdlePlaceholder({ state }) {
-  const finished = state === 'FINISH'
-  return (
-    <div className="w-full h-28 rounded bg-zinc-100 dark:bg-zinc-800 mb-3 flex flex-col items-center justify-center gap-2 select-none">
-      {finished ? (
-        /* ── Finished: printer + checkmark + confetti dots ── */
-        <svg width="52" height="44" viewBox="0 0 52 44" fill="none">
-          {/* body */}
-          <rect x="8" y="18" width="34" height="20" rx="5" className="fill-zinc-300 dark:fill-zinc-600" />
-          {/* feeder */}
-          <rect x="14" y="7" width="22" height="14" rx="3" className="fill-zinc-200 dark:fill-zinc-700" />
-          {/* slot */}
-          <rect x="10" y="25" width="30" height="3" rx="1.5" className="fill-zinc-400 dark:fill-zinc-500" />
-          {/* paper */}
-          <rect x="16" y="9" width="16" height="17" rx="1.5" fill="white" />
-          {/* checkmark */}
-          <path d="M20 18.5 L23 21.5 L29 14.5" stroke="#10b981" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-          {/* confetti */}
-          <circle cx="4"  cy="10" r="2"   fill="#fbbf24" opacity="0.8" />
-          <circle cx="48" cy="8"  r="1.5" fill="#fbbf24" opacity="0.7" />
-          <circle cx="46" cy="34" r="2"   fill="#93c5fd" opacity="0.7" />
-          <circle cx="6"  cy="34" r="1.5" fill="#86efac" opacity="0.7" />
-          <circle cx="48" cy="22" r="1"   fill="#f9a8d4" opacity="0.8" />
-          <circle cx="4"  cy="24" r="1"   fill="#93c5fd" opacity="0.6" />
-        </svg>
-      ) : (
-        /* ── Idle: printer + blank paper + sparkle dots ── */
-        <svg width="52" height="44" viewBox="0 0 52 44" fill="none">
-          {/* body */}
-          <rect x="8" y="18" width="34" height="20" rx="5" className="fill-zinc-300 dark:fill-zinc-600" />
-          {/* feeder */}
-          <rect x="14" y="7" width="22" height="14" rx="3" className="fill-zinc-200 dark:fill-zinc-700" />
-          {/* slot */}
-          <rect x="10" y="25" width="30" height="3" rx="1.5" className="fill-zinc-400 dark:fill-zinc-500" />
-          {/* blank paper */}
-          <rect x="16" y="9" width="16" height="17" rx="1.5" fill="white" />
-          {/* dashes suggesting empty page */}
-          <line x1="19" y1="15" x2="29" y2="15" stroke="#d4d4d8" strokeWidth="1.5" strokeLinecap="round" strokeDasharray="2 2" />
-          <line x1="19" y1="19" x2="27" y2="19" stroke="#d4d4d8" strokeWidth="1.5" strokeLinecap="round" strokeDasharray="2 2" />
-          {/* sparkles */}
-          <circle cx="4"  cy="10" r="2"   fill="#93c5fd" opacity="0.7" />
-          <circle cx="48" cy="12" r="1.5" fill="#c4b5fd" opacity="0.7" />
-          <circle cx="46" cy="30" r="1"   fill="#93c5fd" opacity="0.5" />
-          <circle cx="5"  cy="28" r="1.5" fill="#c4b5fd" opacity="0.5" />
-        </svg>
-      )}
-      <p className="text-[11px] font-medium text-zinc-400 dark:text-zinc-500 tracking-wide">
-        {finished ? 'Print complete — ready for the next one!' : "Bed's free — what shall we print?"}
-      </p>
-    </div>
-  )
-}
-
-const MODEL_ACCENT = {
-  A1:  'border-t-violet-500',
-  P1S: 'border-t-brand-500',
-  P2S: 'border-t-emerald-500',
-  H2D: 'border-t-amber-500',
-}
-
-function formatTime(minutes) {
-  if (!minutes) return '—'
-  const h = Math.floor(minutes / 60)
-  const m = minutes % 60
-  return h > 0 ? `${h}h ${m}m` : `${m}m`
-}
-
-/** Compact temperature cell: "72° /210°" on one line. */
+/** Compact temperature cell: "72°/210°" on one line. */
 function TempCell({ label, current, target }) {
+  const tempUnit = useUnitStore((s) => s.tempUnit)
+
   const c = current ?? 0
   const t = target  ?? 0
+
+  // Heating/cooling logic stays in Celsius
   const isHeating = t > 0 && c < t - 2
   const atTemp    = t > 0 && c >= t - 2
   const isCooling = t === 0 && c > 40   // target off but still warm
@@ -107,10 +46,10 @@ function TempCell({ label, current, target }) {
     <div className="flex flex-col gap-0.5 min-w-0">
       <span className="text-[10px] text-zinc-400 leading-none">{label}</span>
       <span className={`text-sm font-semibold tabular-nums leading-tight ${valueClass}`}>
-        {c.toFixed(0)}°
+        {formatTemp(c, tempUnit)}
         {t > 0 && (
           <span className="text-[11px] font-normal text-zinc-400 ml-0.5">
-            /{t.toFixed(0)}°
+            /{formatTemp(t, tempUnit)}
           </span>
         )}
       </span>
@@ -139,8 +78,9 @@ async function toggleLight(printerId, currentMode) {
 }
 
 export function PrinterCard({ printer, status, dismissed = [] }) {
-  const navigate   = useNavigate()
+  const navigate     = useNavigate()
   const [showCamera, setShowCamera] = useState(false)
+  const thumbUrl     = useThumbnailUrl(printer.id)
 
   const st        = status ?? {}
   const isRunning = st.gcode_state === 'RUNNING'
@@ -251,7 +191,7 @@ export function PrinterCard({ printer, status, dismissed = [] }) {
         {/* ── Print thumbnail / idle placeholder ───────────────────── */}
         {isRunning && (st.cover_file || st.gcode_file || st.current_file) ? (
           <img
-            src={`/api/printers/${printer.id}/thumbnail`}
+            src={thumbUrl}
             alt="Print preview"
             className="w-full h-28 object-contain rounded bg-zinc-100 dark:bg-zinc-800 mb-3"
             onError={(e) => { e.currentTarget.style.display = 'none' }}
@@ -267,6 +207,7 @@ export function PrinterCard({ printer, status, dismissed = [] }) {
               trays={st.ams_trays}
               units={st.ams_units ?? []}
               currentTray={st.ams_current_tray}
+              model={printer.model}
               compact
             />
           </div>

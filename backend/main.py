@@ -11,15 +11,8 @@ Responsibilities:
 """
 
 import asyncio
-import ftplib
-import io
 import logging
 import os
-import re
-import ssl
-import subprocess
-import tempfile
-import zipfile
 from contextlib import asynccontextmanager
 from typing import Set
 
@@ -29,6 +22,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 
 import database as db
+import ftps
+import thumbnail
 from models import (
     Printer, PrinterCreate, PrinterUpdate,
     PrinterStatus, PrintControl, LightControl, SettingsUpdate, AlertDismiss,
@@ -36,7 +31,7 @@ from models import (
 from mqtt_manager import MQTTManager
 
 # ---------------------------------------------------------------------------
-# Logging — configure before any module-level logger calls
+# Logging
 # ---------------------------------------------------------------------------
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -46,419 +41,15 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 GO2RTC_URL = os.getenv("GO2RTC_URL", "http://go2rtc:1984")
 
-# Minimum chamber temperature (°C) to display. Printers without an enclosure
-# or in cloud mode report 0–5 °C; suppress those readings.
-CHAMBER_TEMP_MIN_DISPLAY = 15
-
-# Thumbnail paths inside Bambu .gcode.3mf ZIP archives, tried in preference
-# order. These are plate renders written by Bambu Studio / Orca Slicer.
-_3MF_THUMBNAIL_PATHS = [
-    "Metadata/plate_1.png",         # full-size plate render (most common)
-    "Metadata/plate_1_small.png",
-    "Metadata/top_1.png",           # top-down view
-    "Metadata/pick_1.png",          # isometric pick view
-    "Metadata/plate_2.png",         # multi-plate jobs
-    "Metadata/thumbnail_v2.png",    # older Bambu Studio format
-    "Metadata/thumbnail.png",
-    "Metadata/thumbnail_small.png",
-    "thumbnail/thumbnail.png",
-]
-
 # ---------------------------------------------------------------------------
 # In-memory state
 # ---------------------------------------------------------------------------
 ws_clients: Set[WebSocket] = set()
 mqtt_manager: MQTTManager | None = None
 status_cache: dict[str, dict] = {}
-thumbnail_cache: dict[str, bytes] = {}
-timelapse_thumb_cache: dict[str, bytes] = {}
 
 # Maps printer_id → active PrintJob.id while a print is running.
 _print_sessions: dict[str, str] = {}
-
-
-# ---------------------------------------------------------------------------
-# Implicit FTPS (port 990) with SSL session reuse
-# ---------------------------------------------------------------------------
-
-class _ImplicitFTP_TLS(ftplib.FTP_TLS):
-    """Implicit FTPS with SSL session reuse — required by Bambu printers.
-
-    Two problems solved:
-    1. Implicit FTPS: SSL wraps the control socket immediately on connect
-       (no STARTTLS handshake, unlike explicit FTPS on port 21).
-    2. SSL session reuse: Bambu returns 522 on data connections unless the
-       data channel reuses the control channel's TLS session. We override
-       ntransfercmd to pass session=self.sock.session when wrapping.
-    """
-
-    def __init__(self):
-        super().__init__()
-        self._sock = None
-
-    @property
-    def sock(self):
-        return self._sock
-
-    @sock.setter
-    def sock(self, value):
-        # Wrap plain sockets in TLS immediately (implicit mode).
-        if value is not None and not isinstance(value, ssl.SSLSocket):
-            value = self.context.wrap_socket(value)
-        self._sock = value
-
-    def ntransfercmd(self, cmd, rest=None):
-        """Open data connection reusing the control channel's SSL session."""
-        conn, size = ftplib.FTP.ntransfercmd(self, cmd, rest)
-        if self._prot_p:
-            conn = self.context.wrap_socket(
-                conn,
-                server_hostname=self.host,
-                session=self.sock.session,  # key: reuse existing session
-            )
-        return conn, size
-
-
-def _make_ftps_context() -> ssl.SSLContext:
-    """Create a permissive SSL context suitable for Bambu's self-signed cert."""
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
-    return ctx
-
-
-def _ftps_connect(ip: str, access_code: str, timeout: int = 10) -> _ImplicitFTP_TLS:
-    """Open an authenticated implicit-FTPS connection to a printer."""
-    ftp = _ImplicitFTP_TLS()
-    ftp.context = _make_ftps_context()
-    ftp.connect(host=ip, port=990, timeout=timeout)
-    ftp.login("bblp", access_code)
-    ftp.prot_p()
-    return ftp
-
-
-def _ftps_download(ip: str, access_code: str, remote_path: str, timeout: int = 10) -> bytes | None:
-    """Download a single file from the printer SD card via implicit FTPS.
-
-    Returns the raw bytes on success, None if the file is missing or any
-    network/auth error occurs.
-    """
-    try:
-        ftp = _ftps_connect(ip, access_code, timeout)
-        buf = io.BytesIO()
-        ftp.retrbinary(f"RETR /{remote_path.lstrip('/')}", buf.write)
-        ftp.quit()
-        return buf.getvalue()
-    except Exception as exc:
-        logger.debug(f"FTPS download {ip}/{remote_path}: {exc}")
-        return None
-
-
-def _ftps_list_dir(ip: str, access_code: str, path: str = "/") -> list[str] | None:
-    """List a directory on the printer SD card. Returns None on failure."""
-    try:
-        ftp = _ftps_connect(ip, access_code, timeout=5)
-        entries = ftp.nlst(path)
-        ftp.quit()
-        return entries
-    except Exception as exc:
-        logger.debug(f"FTPS list {path} on {ip}: {exc}")
-        return None
-
-
-def _ftps_download_partial(
-    ip: str, access_code: str, remote_path: str, max_bytes: int = 8 * 1024 * 1024
-) -> bytes | None:
-    """Download the first *max_bytes* of a file via implicit FTPS.
-
-    Bambu timelapse MP4s are encoded with the moov atom at the front
-    (fast-start / web-optimised), so the first ~4–8 MB contains everything
-    ffmpeg needs to decode a poster frame without fetching the full file.
-    """
-    try:
-        ftp = _ftps_connect(ip, access_code, timeout=20)
-        buf = io.BytesIO()
-
-        def _writer(chunk: bytes) -> None:
-            remaining = max_bytes - buf.tell()
-            if remaining <= 0:
-                raise ftplib.error_reply("partial done")  # abort the transfer
-            buf.write(chunk[:remaining])
-
-        try:
-            ftp.retrbinary(f"RETR /{remote_path.lstrip('/')}", _writer)
-        except ftplib.error_reply:
-            pass  # expected abort after max_bytes
-        try:
-            ftp.quit()
-        except Exception:
-            pass
-        data = buf.getvalue()
-        return data if data else None
-    except Exception as exc:
-        logger.debug(f"FTPS partial download {ip}/{remote_path}: {exc}")
-        return None
-
-
-def _extract_video_frame(video_bytes: bytes) -> bytes | None:
-    """Use ffmpeg to extract the first decodable frame as a JPEG.
-
-    Writes *video_bytes* to a temp file so ffmpeg can seek even when only
-    the initial chunk of the file is available (requires fast-start MP4).
-    Returns raw JPEG bytes or None if extraction fails.
-    """
-    try:
-        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
-            tmp.write(video_bytes)
-            tmp_path = tmp.name
-
-        result = subprocess.run(
-            [
-                "ffmpeg", "-y",
-                "-i", tmp_path,
-                "-ss", "0",
-                "-frames:v", "1",
-                "-vf", "scale=480:-1",   # thumbnail width 480px, preserve AR
-                "-f", "image2",
-                "-vcodec", "mjpeg",
-                "pipe:1",
-            ],
-            capture_output=True,
-            timeout=15,
-        )
-        os.unlink(tmp_path)
-
-        if result.returncode == 0 and result.stdout:
-            return result.stdout
-        logger.debug(f"[timelapse thumb] ffmpeg exit {result.returncode}: {result.stderr[-200:]!r}")
-        return None
-    except Exception as exc:
-        logger.debug(f"[timelapse thumb] ffmpeg error: {exc}")
-        return None
-
-
-# ---------------------------------------------------------------------------
-# Thumbnail helpers
-# ---------------------------------------------------------------------------
-
-def _extract_thumbnail_from_3mf(data: bytes) -> bytes | None:
-    """Extract the first matching plate thumbnail from a .gcode.3mf ZIP.
-
-    Bambu/Orca slicers embed PNG renders inside the ZIP. We try paths in
-    _3MF_THUMBNAIL_PATHS order and return the first hit.
-    """
-    try:
-        with zipfile.ZipFile(io.BytesIO(data)) as zf:
-            names = zf.namelist()
-            logger.info(f"[3mf] zip entries ({len(names)}): {names[:20]}")
-            for path in _3MF_THUMBNAIL_PATHS:
-                if path in names:
-                    return zf.read(path)
-            logger.info(f"[3mf] no thumbnail path matched; candidates: {_3MF_THUMBNAIL_PATHS}")
-    except Exception as exc:
-        logger.info(f"[3mf] extraction failed ({len(data)} bytes, magic={data[:4]!r}): {exc}")
-    return None
-
-
-def _ftps_list_3mf(ip: str, access_code: str) -> list[str]:
-    """Return .3mf paths from the printer SD card, newest-first when MDTM works.
-
-    Model differences:
-      P2S / H2D: .gcode.3mf files at FTP root, returned as /name.gcode.3mf
-      A1  / P1S: .3mf files inside /cache/, returned as bare names by nlst
-
-    The /cache/ listing is capped at 20 to avoid iterating 400+ files on
-    busy P1S printers.
-    """
-    try:
-        ftp = _ftps_connect(ip, access_code, timeout=10)
-        candidates: list[str] = []
-
-        # P2S / H2D: .gcode.3mf at root
-        root_entries = ftp.nlst("/")
-        candidates.extend(e for e in root_entries if e.lower().endswith(".gcode.3mf"))
-
-        # A1 / P1S: .3mf files under /cache/
-        if not candidates:
-            try:
-                for entry in ftp.nlst("/cache"):
-                    name = entry.lstrip("/")
-                    if name.lower().endswith(".3mf") and not name.lower().endswith(".bbl"):
-                        candidates.append(f"/cache/{name}")
-                        if len(candidates) >= 20:
-                            break
-            except Exception as cache_exc:
-                logger.info(f"[thumbnail] /cache listing failed on {ip}: {cache_exc}")
-
-        logger.info(f"[thumbnail] {ip} SD candidates ({len(candidates)}): {candidates[:8]}")
-
-        if not candidates:
-            ftp.quit()
-            return []
-
-        # Sort newest-first via MDTM timestamps when firmware supports it.
-        timed: list[tuple[str, str]] = []
-        mdtm_supported = False
-        for path in candidates:
-            try:
-                resp = ftp.sendcmd(f"MDTM {path}")
-                timed.append((resp.split()[-1], path))
-                mdtm_supported = True
-            except Exception:
-                timed.append(("", path))
-
-        ftp.quit()
-
-        if mdtm_supported:
-            timed.sort(reverse=True)
-            logger.info(f"[thumbnail] {ip} newest by MDTM: {[p for _, p in timed[:3]]}")
-
-        return [p for _, p in timed]
-
-    except Exception as exc:
-        logger.info(f"[thumbnail] _ftps_list_3mf {ip} failed: {exc}")
-        return []
-
-
-def _fetch_thumbnail_sync(
-    printer_id: str,
-    ip: str,
-    access_code: str,
-    cover_file: str,
-    gcode_file: str,
-    subtask_name: str = "",
-) -> bytes | None:
-    """Fetch a print thumbnail from the printer SD card (runs in thread pool).
-
-    Tries four strategies in sequence, stopping at the first hit:
-
-    1a. subtask_name / gcode_file ends in .3mf → direct download from
-        /cache/<name> then /<name>  (A1 / P1S firmware pattern)
-
-    1b. subtask_name looks like a job title (not a filename) → try
-        /<subtask_name>.gcode.3mf  (P2S / H2D firmware pattern)
-
-    2.  List all .3mf files on SD card sorted newest-first, try each
-        until we find one with an embedded thumbnail.
-
-    3.  gcode_file path itself is a .3mf (some firmware variants).
-
-    4.  Explicit cover_file path from MQTT (pre-rendered JPEG/PNG).
-
-    Cache key is printer_id (one slot per printer).  The cache is cleared
-    by on_printer_status() whenever current_file changes, so every new job
-    always triggers a fresh fetch regardless of filename reuse.
-    """
-    if printer_id in thumbnail_cache:
-        return thumbnail_cache[printer_id]
-
-    def _cache(data: bytes) -> bytes:
-        thumbnail_cache[printer_id] = data
-        return data
-
-    logger.info(
-        f"[thumbnail] {ip} subtask={subtask_name!r} "
-        f"cover={cover_file!r} gcode={gcode_file!r}"
-    )
-
-    # Strategy 0: /data/Metadata/plate_N.gcode → fetch plate_N.png directly.
-    # H2D and P1S report this path for cloud-mode prints.  The printer stores
-    # the plate thumbnails as PNG files; the internal /data/ path isn't
-    # reachable via FTPS, so we also try root-relative variants.
-    # IMPORTANT: if this is clearly a cloud-internal path and no thumbnail is
-    # found, we return None immediately rather than falling through to the SD
-    # card scan — that scan reliably returns the *wrong* thumbnail because the
-    # currently-printing file is not on the SD card at all.
-    plate_match = re.match(r".*/plate_(\d+)\.gcode$", gcode_file or "", re.IGNORECASE)
-    if plate_match:
-        plate = plate_match.group(1)
-        candidate_paths = [
-            f"/data/Metadata/plate_{plate}.png",
-            f"/data/Metadata/plate_{plate}_small.png",
-            f"/Metadata/plate_{plate}.png",
-            f"/Metadata/plate_{plate}_small.png",
-            f"/cache/Metadata/plate_{plate}.png",
-        ]
-        for thumb_path in candidate_paths:
-            img = _ftps_download(ip, access_code, thumb_path, timeout=10)
-            if img and img[:4] in (b"\x89PNG", b"\xff\xd8\xff"):
-                logger.info(f"[thumbnail] hit via strategy 0 (plate png): {thumb_path}")
-                return _cache(img)
-
-        # Strategy 0b: named cloud print.
-        # When the user gives the job a name in Bambu Studio before sending,
-        # the .3mf is stored at the SD card root even for cloud prints.
-        # gcode_file is still /data/Metadata/plate_N.gcode, but subtask_name
-        # is the real filename.  Slicer-profile descriptions always contain
-        # commas ("0.16mm layer, 2 walls, 8% infill") — real filenames don't.
-        if subtask_name and "," not in subtask_name and not subtask_name.lower().endswith(".gcode"):
-            for ext in (".gcode.3mf", ".3mf"):
-                raw = _ftps_download(ip, access_code, f"/{subtask_name}{ext}", timeout=20)
-                if raw:
-                    img = _extract_thumbnail_from_3mf(raw)
-                    if img:
-                        logger.info(f"[thumbnail] hit via strategy 0b (named cloud): /{subtask_name}{ext}")
-                        return _cache(img)
-
-        # Unnamed cloud print — thumbnail lives in printer internal memory
-        # (/data/Metadata/) which is not accessible over FTPS.  Return None
-        # rather than falling through to the SD scan (would return wrong file).
-        logger.info(f"[thumbnail] strategy 0: unnamed cloud print on {ip}, no thumbnail via FTPS")
-        return None
-
-    # Strategy 1a: direct .3mf download (A1 / P1S)
-    for name in filter(None, [subtask_name, gcode_file]):
-        if name.lower().endswith(".3mf"):
-            clean = name.lstrip("/")
-            for path in [f"/cache/{clean}", f"/{clean}"]:
-                raw = _ftps_download(ip, access_code, path, timeout=20)
-                if raw:
-                    img = _extract_thumbnail_from_3mf(raw)
-                    if img:
-                        logger.info(f"[thumbnail] hit via strategy 1a: {path}")
-                        return _cache(img)
-
-    # Strategy 1b: job-title .gcode.3mf at SD root (P2S / H2D)
-    if subtask_name and not subtask_name.lower().endswith(".3mf"):
-        for ext in (".gcode.3mf", ".3mf"):
-            raw = _ftps_download(ip, access_code, f"/{subtask_name}{ext}", timeout=20)
-            if raw:
-                img = _extract_thumbnail_from_3mf(raw)
-                if img:
-                    logger.info(f"[thumbnail] hit via strategy 1b: /{subtask_name}{ext}")
-                    return _cache(img)
-
-    # Strategy 2: scan SD card newest-first
-    for candidate in _ftps_list_3mf(ip, access_code):
-        raw = _ftps_download(ip, access_code, candidate, timeout=20)
-        if raw:
-            img = _extract_thumbnail_from_3mf(raw)
-            if img:
-                logger.info(f"[thumbnail] hit via strategy 2: {candidate}")
-                return _cache(img)
-            logger.info(f"[thumbnail] no image in {candidate}")
-
-    # Strategy 3: gcode_file is itself a .3mf
-    if gcode_file and ".3mf" in gcode_file.lower():
-        raw = _ftps_download(ip, access_code, gcode_file, timeout=20)
-        if raw:
-            img = _extract_thumbnail_from_3mf(raw)
-            if img:
-                logger.info(f"[thumbnail] hit via strategy 3: {gcode_file}")
-                return _cache(img)
-
-    # Strategy 4: explicit cover_file from MQTT
-    if cover_file:
-        img = _ftps_download(ip, access_code, cover_file, timeout=5)
-        if img:
-            logger.info(f"[thumbnail] hit via strategy 4 (cover_file): {cover_file}")
-            return _cache(img)
-
-    logger.debug(
-        f"[thumbnail] no thumbnail for {ip}: "
-        f"subtask={subtask_name!r} gcode={gcode_file!r} cover={cover_file!r}"
-    )
-    return None
 
 
 # ---------------------------------------------------------------------------
@@ -493,10 +84,7 @@ async def _go2rtc_delete(printer_id: str) -> None:
 # ---------------------------------------------------------------------------
 
 async def broadcast(msg: dict) -> None:
-    """Send a JSON message to all connected WebSocket clients.
-
-    Silently drops dead connections without raising.
-    """
+    """Send a JSON message to all connected WebSocket clients."""
     dead: Set[WebSocket] = set()
     for ws in ws_clients:
         try:
@@ -520,13 +108,12 @@ def on_printer_status(status: PrinterStatus) -> None:
     prev = status_cache.get(status.printer_id, {})
     prev_state = prev.get("gcode_state", "OFFLINE")
     curr_state = status.gcode_state
-
     loop = app.state.loop
 
     # Clear thumbnail cache whenever the active file changes so the next
     # request always fetches a fresh image for the new job.
     if prev.get("current_file") != status.current_file:
-        thumbnail_cache.pop(status.printer_id, None)
+        thumbnail.cache.pop(status.printer_id, None)
 
     # Print started
     if prev_state != "RUNNING" and curr_state == "RUNNING":
@@ -581,7 +168,7 @@ def on_printer_status(status: PrinterStatus) -> None:
 async def lifespan(app: FastAPI):
     app.state.loop = asyncio.get_running_loop()
     db.init_db()
-    db.abandon_running_jobs()  # clean up stale jobs from a prior server session
+    db.abandon_running_jobs()
 
     global mqtt_manager
     mqtt_manager = MQTTManager(on_printer_status)
@@ -678,32 +265,6 @@ async def update_settings(data: SettingsUpdate):
 # Thumbnails
 # ---------------------------------------------------------------------------
 
-async def _go2rtc_snapshot(printer_id: str) -> bytes | None:
-    """Grab a single JPEG frame from go2rtc for the printer's camera stream.
-
-    Used as a thumbnail fallback for cloud-mode prints where the .3mf is not
-    accessible via FTPS.  Only called when lan_mode is True (RTSP reachable).
-    The result is cached in thumbnail_cache so subsequent requests are instant.
-    """
-    stream_name = f"bambu_{printer_id}"
-    url = f"{GO2RTC_URL}/api/frame.jpeg?src={stream_name}"
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(url)
-            if resp.status_code == 200 and len(resp.content) > 1000:
-                logger.info(
-                    f"[thumbnail] camera snapshot for {stream_name}: {len(resp.content)}B"
-                )
-                return resp.content
-            logger.debug(
-                f"[thumbnail] go2rtc snapshot {stream_name}: "
-                f"status={resp.status_code} size={len(resp.content)}B"
-            )
-    except Exception as exc:
-        logger.debug(f"[thumbnail] go2rtc snapshot failed for {stream_name}: {exc}")
-    return None
-
-
 @app.get("/api/printers/{printer_id}/thumbnail")
 async def get_thumbnail(printer_id: str):
     p = db.get_printer(printer_id)
@@ -719,15 +280,15 @@ async def get_thumbnail(printer_id: str):
         raise HTTPException(status_code=404, detail="No print file available")
 
     data = await asyncio.get_running_loop().run_in_executor(
-        None, _fetch_thumbnail_sync, printer_id, p.ip, p.access_code, cover, gcode, subtask
+        None, thumbnail.fetch_sync, printer_id, p.ip, p.access_code, cover, gcode, subtask
     )
 
     # FTPS thumbnail unavailable — fall back to a live camera snapshot for
     # printers that have LAN Mode enabled (go2rtc stream is reachable).
     if not data and p.lan_mode:
-        data = await _go2rtc_snapshot(printer_id)
+        data = await thumbnail.snapshot_from_camera(printer_id)
         if data:
-            thumbnail_cache[printer_id] = data   # cache so next request is instant
+            thumbnail.cache[printer_id] = data
 
     if not data:
         raise HTTPException(status_code=404, detail="Thumbnail unavailable")
@@ -738,11 +299,7 @@ async def get_thumbnail(printer_id: str):
 
 @app.get("/api/printers/{printer_id}/thumbnail/debug")
 async def debug_thumbnail(printer_id: str):
-    """Diagnostic endpoint: returns MQTT state and FTPS directory listings.
-
-    Useful for diagnosing thumbnail fetch failures without touching production
-    paths. Safe to call while a print is in progress.
-    """
+    """Diagnostic endpoint: returns MQTT state and FTPS directory listings."""
     p = db.get_printer(printer_id)
     if not p:
         raise HTTPException(status_code=404, detail="Printer not found")
@@ -751,11 +308,11 @@ async def debug_thumbnail(printer_id: str):
     return {
         "printer_ip": p.ip,
         "current_file_subtask": st.get("current_file") or None,
-        "cover_file_from_mqtt": st.get("cover_file") or None,
-        "gcode_file_from_mqtt": st.get("gcode_file") or None,
-        "gcode_state": st.get("gcode_state") or None,
+        "cover_file_from_mqtt":  st.get("cover_file") or None,
+        "gcode_file_from_mqtt":  st.get("gcode_file") or None,
+        "gcode_state":           st.get("gcode_state") or None,
         "sd_3mf_files": await asyncio.get_running_loop().run_in_executor(
-            None, _ftps_list_3mf, p.ip, p.access_code
+            None, thumbnail._list_3mf, p.ip, p.access_code
         ),
     }
 
@@ -774,8 +331,6 @@ async def control_print(printer_id: str, data: PrintControl):
     if action not in ("pause", "resume", "stop"):
         raise HTTPException(status_code=400, detail="action must be pause | resume | stop")
 
-    # Bambu firmware requires "param" to be present (empty string) or the
-    # command is rejected and the printer logs HMS 0007 "MQTT command failed".
     payload = {"print": {"sequence_id": "2005", "command": action, "param": ""}}
     if not mqtt_manager.publish(printer_id, payload):
         raise HTTPException(status_code=503, detail="MQTT not connected")
@@ -792,7 +347,6 @@ async def control_light(printer_id: str, data: LightControl):
     if mode not in ("on", "off"):
         raise HTTPException(status_code=400, detail="mode must be on | off")
 
-    # Bambu MQTT requires all timing fields or the command is silently ignored.
     payload = {
         "system": {
             "sequence_id": "2005",
@@ -816,13 +370,11 @@ async def control_light(printer_id: str, data: LightControl):
 
 @app.get("/api/printers/{printer_id}/dismissed-alerts")
 def list_dismissed_alerts(printer_id: str):
-    """Return the list of HMS codes the user has dismissed for this printer."""
     return {"dismissed": db.get_dismissed_alerts(printer_id)}
 
 
 @app.post("/api/printers/{printer_id}/dismissed-alerts", status_code=201)
 async def dismiss_alert(printer_id: str, data: AlertDismiss):
-    """Dismiss an HMS alert so it is hidden in the UI. Idempotent."""
     p = db.get_printer(printer_id)
     if not p:
         raise HTTPException(status_code=404, detail="Printer not found")
@@ -837,7 +389,6 @@ async def dismiss_alert(printer_id: str, data: AlertDismiss):
 
 @app.delete("/api/printers/{printer_id}/dismissed-alerts/{hms_code}", status_code=200)
 async def undismiss_alert(printer_id: str, hms_code: str):
-    """Restore a dismissed HMS alert so it appears in the UI again."""
     p = db.get_printer(printer_id)
     if not p:
         raise HTTPException(status_code=404, detail="Printer not found")
@@ -861,13 +412,12 @@ async def list_timelapses(printer_id: str):
         raise HTTPException(status_code=404, detail="Printer not found")
 
     def _list() -> list[str]:
-        entries = _ftps_list_dir(p.ip, p.access_code, "/timelapse") or []
+        entries = ftps.list_dir(p.ip, p.access_code, "/timelapse") or []
         files = [
             e.split("/")[-1] if "/" in e else e
             for e in entries
             if e.lower().endswith((".mp4", ".avi", ".mov"))
         ]
-        # Return only the 3 most recent so the UI doesn't get cluttered.
         return sorted(files, reverse=True)[:3]
 
     files = await asyncio.get_running_loop().run_in_executor(None, _list)
@@ -876,34 +426,27 @@ async def list_timelapses(printer_id: str):
 
 @app.get("/api/printers/{printer_id}/timelapses/{filename}/thumb")
 async def timelapse_thumb(printer_id: str, filename: str):
-    """Return a JPEG poster frame extracted from the first 8 MB of the video.
-
-    Results are cached in memory for the lifetime of the server process.
-    Returns 404 when ffmpeg cannot decode a frame (non-fast-start file or
-    very short partial data).
-    """
+    """Return a JPEG poster frame from the first 8 MB of the timelapse video."""
     if "/" in filename or ".." in filename:
         raise HTTPException(status_code=400, detail="Invalid filename")
 
     cache_key = f"{printer_id}:{filename}"
-    if cache_key in timelapse_thumb_cache:
-        return Response(content=timelapse_thumb_cache[cache_key], media_type="image/jpeg")
+    if cache_key in thumbnail.cache:
+        return Response(content=thumbnail.cache[cache_key], media_type="image/jpeg")
 
     p = db.get_printer(printer_id)
     if not p:
         raise HTTPException(status_code=404, detail="Printer not found")
 
     def _make_thumb() -> bytes | None:
-        partial = _ftps_download_partial(p.ip, p.access_code, f"/timelapse/{filename}")
-        if not partial:
-            return None
-        return _extract_video_frame(partial)
+        partial = ftps.download_partial(p.ip, p.access_code, f"/timelapse/{filename}")
+        return ftps.extract_video_frame(partial) if partial else None
 
     jpeg = await asyncio.get_running_loop().run_in_executor(None, _make_thumb)
     if not jpeg:
         raise HTTPException(status_code=404, detail="Thumbnail unavailable")
 
-    timelapse_thumb_cache[cache_key] = jpeg
+    thumbnail.cache[cache_key] = jpeg
     return Response(content=jpeg, media_type="image/jpeg")
 
 
@@ -916,7 +459,7 @@ async def download_timelapse(printer_id: str, filename: str):
         raise HTTPException(status_code=400, detail="Invalid filename")
 
     data = await asyncio.get_running_loop().run_in_executor(
-        None, _ftps_download, p.ip, p.access_code, f"/timelapse/{filename}", 120
+        None, ftps.download, p.ip, p.access_code, f"/timelapse/{filename}", 120
     )
     if not data:
         raise HTTPException(status_code=404, detail="File not found")
@@ -943,12 +486,9 @@ def get_all_statuses():
 
 
 @app.get("/api/status/{printer_id}")
-def get_status(printer_id: str):
+def get_printer_status(printer_id: str):
     if printer_id in status_cache:
         return status_cache[printer_id]
-    s = mqtt_manager.get_status(printer_id)
-    if s:
-        return s.model_dump()
     raise HTTPException(status_code=404, detail="Status not found")
 
 
@@ -970,10 +510,10 @@ async def websocket_endpoint(websocket: WebSocket):
         await websocket.send_json({
             "type": "init",
             "data": {
-                "printers":          [p.model_dump() for p in db.get_all_printers()],
-                "statuses":          status_cache,
-                "settings":          db.get_settings(),
-                "dismissed_alerts":  db.get_all_dismissed_alerts(),
+                "printers":         [p.model_dump() for p in db.get_all_printers()],
+                "statuses":         status_cache,
+                "settings":         db.get_settings(),
+                "dismissed_alerts": db.get_all_dismissed_alerts(),
             },
         })
         while True:

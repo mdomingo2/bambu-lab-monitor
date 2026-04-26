@@ -12,6 +12,7 @@ for sending commands (print control, LED control, etc.) back to the printer.
 
 import json
 import ssl
+import time
 import threading
 import logging
 from datetime import datetime, timezone
@@ -113,7 +114,7 @@ class PrinterConnection:
                 self.status.gcode_state = "OFFLINE"
                 self.on_status(self.status)
             if self._running:
-                threading.Event().wait(RECONNECT_DELAY)
+                time.sleep(RECONNECT_DELAY)
 
     # ------------------------------------------------------------------
     # Paho callbacks
@@ -203,17 +204,29 @@ class PrinterConnection:
         except Exception:
             s.stage = ""
 
-        # Fan speeds — Bambu reports 0–15, convert to 0–100 %
-        def _fan(key: str) -> int:
-            try:
-                return round(int(print_data.get(key, "0")) / 15 * 100)
-            except Exception:
-                return 0
+        # Fan speeds — Bambu reports 0–15, convert to 0–100 %.
+        # Use a sentinel so 0 (fan genuinely off) is preserved and not
+        # treated as "missing" by the `or` fallback.
+        _MISSING = object()
 
-        s.fan_speed          = _fan("cooling_fan_speed")  or s.fan_speed
-        s.heatbreak_fan_speed = _fan("heatbreak_fan_speed") or s.heatbreak_fan_speed
-        s.aux_fan_speed      = _fan("big_fan1_speed")     or s.aux_fan_speed
-        s.chamber_fan_speed  = _fan("big_fan2_speed")     or s.chamber_fan_speed
+        def _fan(key: str):
+            raw = print_data.get(key, _MISSING)
+            if raw is _MISSING:
+                return _MISSING
+            try:
+                return round(int(raw) / 15 * 100)
+            except Exception:
+                return _MISSING
+
+        for attr, key in (
+            ("fan_speed",          "cooling_fan_speed"),
+            ("heatbreak_fan_speed","heatbreak_fan_speed"),
+            ("aux_fan_speed",      "big_fan1_speed"),
+            ("chamber_fan_speed",  "big_fan2_speed"),
+        ):
+            val = _fan(key)
+            if val is not _MISSING:
+                setattr(s, attr, val)
 
         # Chamber light state
         for light in print_data.get("lights_report", []):
@@ -279,10 +292,16 @@ class PrinterConnection:
             units: list[AMSUnit] = []
             for unit_idx, ams_unit in enumerate(ams_data.get("ams", [])):
                 try:
+                    raw_trays = ams_unit.get("tray", [])
+                    # Count raw tray entries (incl. empty slots) reported by
+                    # the firmware — this gives the physical slot capacity.
+                    # H2D's single-slot AMS sends 1 entry; standard AMS sends 4.
+                    slot_count = len(raw_trays) if raw_trays else 4
                     units.append(AMSUnit(
                         unit_id=unit_idx,
                         humidity=int(ams_unit.get("humidity", 0)),
                         temp=float(ams_unit.get("temp", 0.0)),
+                        slot_count=slot_count,
                     ))
                 except Exception:
                     pass

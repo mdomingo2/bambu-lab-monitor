@@ -1,10 +1,13 @@
 import { NavLink } from 'react-router-dom'
 import { LayoutGrid, Settings, Wifi, WifiOff, Sun, Moon, History } from 'lucide-react'
 import { usePrinterStore } from '../store/printerStore'
+import { useUnitStore } from '../store/unitStore'
 import { clsx } from 'clsx'
 
 export function Sidebar({ onThemeToggle, theme }) {
-  const connected = usePrinterStore((s) => s.connected)
+  const connected      = usePrinterStore((s) => s.connected)
+  const tempUnit       = useUnitStore((s) => s.tempUnit)
+  const toggleTempUnit = useUnitStore((s) => s.toggleTempUnit)
 
   return (
     <aside className="w-16 shrink-0 bg-white border-r border-zinc-200 dark:bg-zinc-950 dark:border-zinc-800 flex flex-col items-center py-4 gap-2">
@@ -48,6 +51,15 @@ export function Sidebar({ onThemeToggle, theme }) {
       </NavLink>
 
       <div className="mt-auto flex flex-col items-center gap-3">
+        {/* °C / °F toggle */}
+        <button
+          onClick={toggleTempUnit}
+          title={tempUnit === 'C' ? 'Switch to Fahrenheit' : 'Switch to Celsius'}
+          className="btn-ghost p-1.5 text-[11px] font-semibold tabular-nums leading-none text-zinc-500 dark:text-zinc-400 hover:text-brand-600 dark:hover:text-brand-400"
+        >
+          °{tempUnit}
+        </button>
+
         {/* Theme toggle */}
         <button
           onClick={onThemeToggle}

@@ -43,10 +43,4 @@ export const usePrinterStore = create((set, get) => ({
       dismissedAlerts: { ...state.dismissedAlerts, [printerId]: codes },
     })),
 
-  /** True if the given HMS code has been dismissed for the given printer. */
-  isDismissed: (printerId, hmsCode) =>
-    (get().dismissedAlerts[printerId] ?? []).includes(hmsCode),
-
-  getPrinter: (id) => get().printers.find((p) => p.id === id),
-  getStatus:  (id) => get().statuses[id],
 }))

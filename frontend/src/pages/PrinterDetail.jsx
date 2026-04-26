@@ -22,9 +22,9 @@ import { Progress } from '../components/ui/Progress'
 import { TempGauge } from '../components/TempGauge'
 import { AMSDisplay } from '../components/AMSDisplay'
 import { CameraModal } from '../components/CameraModal'
-
-// Chamber temps below this threshold are noise (no enclosure / cloud mode).
-const CHAMBER_TEMP_MIN = 15
+import { formatTime, eta } from '../utils/time'
+import { CHAMBER_TEMP_MIN } from '../utils/constants'
+import { useThumbnailUrl } from '../hooks/useThumbnailUrl'
 
 const SPEED_LABELS = {
   1: 'Silent',
@@ -39,20 +39,6 @@ const NOZZLE_TYPE_LABELS = {
   brass:           'Brass',
 }
 
-function formatTime(minutes) {
-  if (!minutes) return '—'
-  const h = Math.floor(minutes / 60)
-  const m = minutes % 60
-  return h > 0 ? `${h}h ${m}m` : `${m}m`
-}
-
-function eta(minutes) {
-  if (!minutes) return null
-  return new Date(Date.now() + minutes * 60_000).toLocaleTimeString([], {
-    hour: '2-digit', minute: '2-digit',
-  })
-}
-
 /**
  * TimelapseCard — thumbnail poster + filename + download link for one video.
  *
@@ -61,6 +47,8 @@ function eta(minutes) {
  * falls back gracefully to a Film icon placeholder so the layout stays intact.
  */
 function TimelapseCard({ printerId, filename }) {
+  const [thumbError, setThumbError] = useState(false)
+
   const thumbUrl    = `/api/printers/${printerId}/timelapses/${encodeURIComponent(filename)}/thumb`
   const downloadUrl = `/api/printers/${printerId}/timelapses/${encodeURIComponent(filename)}`
 
@@ -76,21 +64,18 @@ function TimelapseCard({ printerId, filename }) {
     >
       {/* Poster image — falls back to icon placeholder on error */}
       <div className="relative aspect-video flex items-center justify-center">
-        <img
-          src={thumbUrl}
-          alt={label}
-          className="w-full h-full object-cover"
-          onError={(e) => {
-            e.currentTarget.style.display = 'none'
-            e.currentTarget.nextElementSibling.style.display = 'flex'
-          }}
-        />
-        {/* Placeholder shown when thumbnail fails */}
-        <div
-          className="absolute inset-0 items-center justify-center text-zinc-400 dark:text-zinc-600 hidden"
-        >
-          <Film size={28} />
-        </div>
+        {thumbError ? (
+          <div className="absolute inset-0 flex items-center justify-center text-zinc-400 dark:text-zinc-600">
+            <Film size={28} />
+          </div>
+        ) : (
+          <img
+            src={thumbUrl}
+            alt={label}
+            className="w-full h-full object-cover"
+            onError={() => setThumbError(true)}
+          />
+        )}
         {/* Download overlay on hover */}
         <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-colors flex items-center justify-center">
           <Download
@@ -142,6 +127,9 @@ export function PrinterDetail() {
 
   // updateDismissedAlerts is a stable action — read once via getState(), no subscription needed.
   const updateDismissed = usePrinterStore.getState().updateDismissedAlerts
+
+  // Auto-refreshing thumbnail URL — cache-busted every 2 minutes while the page is open.
+  const thumbUrl = useThumbnailUrl(id)
 
   useEffect(() => {
     fetch(`/api/printers/${id}/timelapses`)
@@ -450,7 +438,7 @@ export function PrinterDetail() {
             </div>
             {(st.cover_file || st.gcode_file) && (
               <img
-                src={`/api/printers/${printer.id}/thumbnail`}
+                src={thumbUrl}
                 alt="Print preview"
                 className="w-28 h-28 object-contain rounded bg-zinc-100 dark:bg-zinc-800 shrink-0"
                 onError={(e) => { e.currentTarget.style.display = 'none' }}
@@ -506,6 +494,7 @@ export function PrinterDetail() {
             trays={st.ams_trays}
             units={st.ams_units ?? []}
             currentTray={st.ams_current_tray}
+            model={printer.model}
           />
         </div>
       )}

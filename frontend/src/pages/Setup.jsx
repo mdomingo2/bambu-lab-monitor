@@ -276,9 +276,19 @@ export function Setup() {
       </Dialog>
 
       <Dialog open={!!editPrinter} onClose={() => setEditPrinter(null)} title="Edit printer">
-        {editPrinter && (
-          <PrinterForm initial={editPrinter} onSave={handleEdit} onCancel={() => setEditPrinter(null)} saving={saving} error={formError} />
-        )}
+        {editPrinter && (() => {
+          // Strip id so the form never accidentally submits it in the PATCH body.
+          const { id: _id, ...editFields } = editPrinter
+          return (
+            <PrinterForm
+              initial={editFields}
+              onSave={handleEdit}
+              onCancel={() => setEditPrinter(null)}
+              saving={saving}
+              error={formError}
+            />
+          )
+        })()}
       </Dialog>
 
       <Dialog open={!!deleteId} onClose={() => setDeleteId(null)} title="Delete printer" size="sm">

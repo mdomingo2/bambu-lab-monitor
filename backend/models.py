@@ -5,6 +5,8 @@ SQLModel tables (persisted to SQLite):
   Printer       — printer configuration
   FarmSettings  — key/value farm-level settings
   PrintJob      — historical print job records
+  DismissedAlert— user-dismissed HMS alert codes
+  User          — local user account (scaffold for future auth)
 
 Pydantic-only models (in-memory / API schema):
   PrinterStatus — live state from MQTT
@@ -64,6 +66,22 @@ class DismissedAlert(SQLModel, table=True):
     """
     printer_id: str = Field(primary_key=True)
     hms_code: str   = Field(primary_key=True)  # HMS_AAAA-BBBB-CCCC-DDDD
+
+
+class User(SQLModel, table=True):
+    """Local user account — scaffold for future authentication support.
+
+    Passwords are stored as bcrypt hashes (never plaintext).
+    The 'role' field is reserved for future RBAC (e.g. admin / viewer).
+
+    NOTE: Auth endpoints are not yet implemented. This table is created by
+    init_db() so the schema is ready when auth is added.
+    """
+    id: str              = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
+    username: str        = Field(unique=True, index=True)
+    hashed_password: str = ""       # bcrypt hash; empty until auth is wired up
+    role: str            = "admin"  # admin | viewer
+    created_at: str      = ""       # ISO-8601 UTC
 
 
 # ---------------------------------------------------------------------------
@@ -134,8 +152,9 @@ class AMSTray(BaseModel):
 class AMSUnit(BaseModel):
     """AMS enclosure metadata — up to 4 trays per unit."""
     unit_id: int
-    humidity: int = 0   # 0–5 scale; 5 = driest / ideal
-    temp: float = 0.0   # °C inside the AMS
+    humidity: int = 0    # 0–5 scale; 5 = driest / ideal
+    temp: float = 0.0    # °C inside the AMS
+    slot_count: int = 4  # physical slot capacity (H2D AMS = 1, standard AMS = 4)
 
 
 class PrinterStatus(BaseModel):
