@@ -26,7 +26,10 @@ logger = logging.getLogger(__name__)
 
 MQTT_PORT = 8883
 MQTT_USERNAME = "bblp"
-RECONNECT_DELAY = 10  # seconds between reconnect attempts
+RECONNECT_DELAY = 30        # seconds between outer reconnect attempts
+OFFLINE_GRACE_SECS = 20    # don't mark OFFLINE until disconnected this long
+RECONNECT_MIN_DELAY = 5    # Paho exponential-backoff floor (seconds)
+RECONNECT_MAX_DELAY = 60   # Paho exponential-backoff ceiling (seconds)
 
 # Maps stg_cur integers to human-readable stage labels shown in the UI.
 STAGE_LABELS: dict[int, str] = {
@@ -60,6 +63,7 @@ class PrinterConnection:
         self._client: mqtt.Client | None = None
         self._thread: threading.Thread | None = None
         self._running = False
+        self._offline_timer: threading.Timer | None = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -72,6 +76,9 @@ class PrinterConnection:
 
     def stop(self) -> None:
         self._running = False
+        if self._offline_timer is not None:
+            self._offline_timer.cancel()
+            self._offline_timer = None
         if self._client:
             try:
                 self._client.disconnect()
@@ -95,6 +102,13 @@ class PrinterConnection:
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
         client.tls_set_context(ctx)
+
+        # Exponential backoff so we don't hammer the printer when it only
+        # allows one MQTT client at a time (common with LAN-mode printers).
+        client.reconnect_delay_set(
+            min_delay=RECONNECT_MIN_DELAY,
+            max_delay=RECONNECT_MAX_DELAY,
+        )
 
         client.on_connect    = self._on_connect
         client.on_disconnect = self._on_disconnect
@@ -124,6 +138,10 @@ class PrinterConnection:
         if rc != 0:
             logger.warning(f"[{self.printer.name}] MQTT connect failed rc={rc}")
             return
+        # Cancel any pending "mark offline" timer — we're back online.
+        if self._offline_timer is not None:
+            self._offline_timer.cancel()
+            self._offline_timer = None
         logger.info(f"[{self.printer.name}] MQTT connected")
         # Subscribe to the printer's report topic, then request a full push.
         client.subscribe(f"device/{self.printer.serial}/report", qos=0)
@@ -136,8 +154,24 @@ class PrinterConnection:
     def _on_disconnect(self, client, userdata, rc) -> None:
         logger.info(f"[{self.printer.name}] MQTT disconnected rc={rc}")
         self.status.connected = False
-        self.status.gcode_state = "OFFLINE"
-        self.on_status(self.status)
+        # Don't mark OFFLINE immediately — LAN-mode printers often reconnect
+        # within seconds (single-client broker limit). Wait OFFLINE_GRACE_SECS
+        # before declaring the printer truly offline to avoid UI flicker.
+        if self._offline_timer is not None:
+            self._offline_timer.cancel()
+        self._offline_timer = threading.Timer(
+            OFFLINE_GRACE_SECS, self._mark_offline
+        )
+        self._offline_timer.daemon = True
+        self._offline_timer.start()
+
+    def _mark_offline(self) -> None:
+        """Called by the grace-period timer if we haven't reconnected in time."""
+        self._offline_timer = None
+        if not self.status.connected:
+            logger.info(f"[{self.printer.name}] marking OFFLINE after grace period")
+            self.status.gcode_state = "OFFLINE"
+            self.on_status(self.status)
 
     def _on_message(self, client, userdata, msg) -> None:
         try:
