@@ -1,0 +1,219 @@
+"""
+API endpoint tests — exercises every route in main.py via the TestClient.
+
+All MQTT and go2rtc calls are stubbed by conftest.py.
+Database is in-memory and reset between tests.
+"""
+
+import pytest
+
+PRINTER_PAYLOAD = {
+    "name": "Test P1S",
+    "model": "P1S",
+    "ip": "192.168.1.100",
+    "serial": "TESTSERIAL01",
+    "access_code": "12345678",
+    "lan_mode": True,
+}
+
+
+# ── Printer CRUD ─────────────────────────────────────────────────────────────
+
+class TestPrinterCRUD:
+
+    def test_list_printers_empty(self, client):
+        r = client.get("/api/printers")
+        assert r.status_code == 200
+        assert r.json() == []
+
+    def test_add_printer_returns_201(self, client):
+        r = client.post("/api/printers", json=PRINTER_PAYLOAD)
+        assert r.status_code == 201
+
+    def test_add_printer_fields_persisted(self, client):
+        r = client.post("/api/printers", json=PRINTER_PAYLOAD)
+        body = r.json()
+        assert body["name"]        == PRINTER_PAYLOAD["name"]
+        assert body["model"]       == PRINTER_PAYLOAD["model"]
+        assert body["ip"]          == PRINTER_PAYLOAD["ip"]
+        assert body["serial"]      == PRINTER_PAYLOAD["serial"]
+        assert body["access_code"] == PRINTER_PAYLOAD["access_code"]
+        assert body["lan_mode"]    is True
+        assert "id" in body
+
+    def test_add_printer_appears_in_list(self, client):
+        client.post("/api/printers", json=PRINTER_PAYLOAD)
+        r = client.get("/api/printers")
+        assert len(r.json()) == 1
+
+    def test_add_multiple_printers(self, client):
+        client.post("/api/printers", json=PRINTER_PAYLOAD)
+        client.post("/api/printers", json={**PRINTER_PAYLOAD, "name": "Second", "serial": "SN2"})
+        r = client.get("/api/printers")
+        assert len(r.json()) == 2
+
+    def test_get_printer_by_id(self, client):
+        pid = client.post("/api/printers", json=PRINTER_PAYLOAD).json()["id"]
+        r = client.get(f"/api/printers/{pid}")
+        assert r.status_code == 200
+        assert r.json()["id"] == pid
+
+    def test_get_printer_unknown_id_returns_404(self, client):
+        r = client.get("/api/printers/does-not-exist")
+        assert r.status_code == 404
+
+    def test_patch_printer_name(self, client):
+        pid = client.post("/api/printers", json=PRINTER_PAYLOAD).json()["id"]
+        r = client.patch(f"/api/printers/{pid}", json={"name": "Renamed"})
+        assert r.status_code == 200
+        assert r.json()["name"] == "Renamed"
+
+    def test_patch_printer_unknown_id_returns_404(self, client):
+        r = client.patch("/api/printers/bad-id", json={"name": "X"})
+        assert r.status_code == 404
+
+    def test_patch_preserves_unchanged_fields(self, client):
+        pid = client.post("/api/printers", json=PRINTER_PAYLOAD).json()["id"]
+        client.patch(f"/api/printers/{pid}", json={"name": "Renamed"})
+        body = client.get(f"/api/printers/{pid}").json()
+        assert body["model"]  == PRINTER_PAYLOAD["model"]
+        assert body["serial"] == PRINTER_PAYLOAD["serial"]
+
+    def test_delete_printer(self, client):
+        pid = client.post("/api/printers", json=PRINTER_PAYLOAD).json()["id"]
+        r = client.delete(f"/api/printers/{pid}")
+        assert r.status_code == 204
+
+    def test_delete_printer_removes_from_list(self, client):
+        pid = client.post("/api/printers", json=PRINTER_PAYLOAD).json()["id"]
+        client.delete(f"/api/printers/{pid}")
+        assert client.get("/api/printers").json() == []
+
+    def test_delete_printer_unknown_id_returns_404(self, client):
+        r = client.delete("/api/printers/bad-id")
+        assert r.status_code == 404
+
+    def test_lan_mode_defaults_to_true(self, client):
+        payload = {**PRINTER_PAYLOAD}
+        del payload["lan_mode"]
+        r = client.post("/api/printers", json=payload)
+        assert r.json()["lan_mode"] is True
+
+
+# ── Status endpoint ───────────────────────────────────────────────────────────
+
+class TestStatus:
+
+    def test_status_unknown_printer_returns_404(self, client):
+        r = client.get("/api/status/does-not-exist")
+        assert r.status_code == 404
+
+    def test_status_known_printer_not_yet_connected_returns_404(self, client):
+        """Printer added but MQTT hasn't pushed any status yet — still 404."""
+        pid = client.post("/api/printers", json=PRINTER_PAYLOAD).json()["id"]
+        r = client.get(f"/api/status/{pid}")
+        # No MQTT data has been injected, so the status_cache has no entry
+        assert r.status_code == 404
+
+
+# ── Settings ──────────────────────────────────────────────────────────────────
+
+class TestSettings:
+
+    def test_get_settings_returns_defaults(self, client):
+        r = client.get("/api/settings")
+        assert r.status_code == 200
+        assert "farm_name" in r.json()
+        assert r.json()["farm_name"] == "Print Farm"
+
+    def test_patch_farm_name(self, client):
+        r = client.patch("/api/settings", json={"farm_name": "My Lab"})
+        assert r.status_code == 200
+        assert client.get("/api/settings").json()["farm_name"] == "My Lab"
+
+
+# ── Print history ─────────────────────────────────────────────────────────────
+
+class TestHistory:
+
+    def test_history_empty(self, client):
+        r = client.get("/api/history")
+        assert r.status_code == 200
+        assert r.json() == []
+
+    def test_history_returns_jobs_after_write(self, client):
+        import database as db
+        db.start_print_job("printer-1", "Printer One", "model.gcode")
+        r = client.get("/api/history")
+        assert len(r.json()) == 1
+        assert r.json()[0]["file_name"] == "model.gcode"
+        assert r.json()[0]["status"] == "running"
+
+    def test_history_newest_first(self, client):
+        import database as db
+        import time
+        db.start_print_job("p1", "P1", "first.gcode")
+        time.sleep(0.01)
+        db.start_print_job("p1", "P1", "second.gcode")
+        jobs = client.get("/api/history").json()
+        assert jobs[0]["file_name"] == "second.gcode"
+
+    def test_history_finished_job_shows_duration(self, client):
+        import database as db
+        import time
+        job = db.start_print_job("p1", "P1", "test.gcode")
+        time.sleep(0.1)
+        db.finish_print_job(job.id, "completed")
+        jobs = client.get("/api/history").json()
+        assert jobs[0]["status"] == "completed"
+        assert jobs[0]["duration_seconds"] is not None
+        assert jobs[0]["duration_seconds"] >= 0
+
+
+# ── HMS alert dismiss / restore ───────────────────────────────────────────────
+
+class TestDismissedAlerts:
+
+    def _make_printer(self, client):
+        return client.post("/api/printers", json=PRINTER_PAYLOAD).json()["id"]
+
+    def test_dismiss_alert(self, client):
+        pid = self._make_printer(client)
+        r = client.post(
+            f"/api/printers/{pid}/dismissed-alerts",
+            json={"hms_code": "HMS_0500-0500-0001-0007"},
+        )
+        assert r.status_code in (200, 201)
+        assert "HMS_0500-0500-0001-0007" in r.json()["dismissed"]
+
+    def test_dismiss_alert_is_idempotent(self, client):
+        pid = self._make_printer(client)
+        for _ in range(3):
+            client.post(
+                f"/api/printers/{pid}/dismissed-alerts",
+                json={"hms_code": "HMS_0500-0500-0001-0007"},
+            )
+        r = client.get(f"/api/printers/{pid}/dismissed-alerts")
+        assert r.json()["dismissed"].count("HMS_0500-0500-0001-0007") == 1
+
+    def test_restore_alert(self, client):
+        pid = self._make_printer(client)
+        code = "HMS_0500-0500-0001-0007"
+        client.post(f"/api/printers/{pid}/dismissed-alerts", json={"hms_code": code})
+        r = client.delete(f"/api/printers/{pid}/dismissed-alerts/{code}")
+        assert r.status_code == 200
+        assert code not in r.json()["dismissed"]
+
+    def test_get_dismissed_alerts_empty(self, client):
+        pid = self._make_printer(client)
+        r = client.get(f"/api/printers/{pid}/dismissed-alerts")
+        assert r.status_code == 200
+        assert r.json()["dismissed"] == []
+
+    def test_multiple_alerts_dismissed(self, client):
+        pid = self._make_printer(client)
+        codes = ["HMS_0001-0001-0001-0001", "HMS_0002-0002-0002-0002"]
+        for code in codes:
+            client.post(f"/api/printers/{pid}/dismissed-alerts", json={"hms_code": code})
+        dismissed = client.get(f"/api/printers/{pid}/dismissed-alerts").json()["dismissed"]
+        assert set(dismissed) == set(codes)
