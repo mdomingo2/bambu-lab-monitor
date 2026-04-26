@@ -41,8 +41,8 @@ services:
   frontend:
     build: ./frontend
     ports:
-      - "80:80"    # HTTP — immediately redirects to HTTPS
-      - "443:443"  # HTTPS — all real traffic served here
+      - "80:80"      # HTTP — immediately redirects to HTTPS
+      - "8443:443"   # HTTPS — avoids conflict with system use of port 443
     volumes:
       - bambu_certs:/etc/nginx/certs  # TLS cert persisted across restarts
     environment:
