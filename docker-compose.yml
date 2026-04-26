@@ -18,8 +18,11 @@ services:
 
   backend:
     build: ./backend
-    ports:
-      - "8000:8000"
+    # Port 8000 is NOT exposed externally — all traffic reaches the backend
+    # through the Nginx reverse proxy over HTTPS.  Uncomment the lines below
+    # only if you need direct API access for local development or debugging.
+    # ports:
+    #   - "8000:8000"
     volumes:
       - bambu_data:/app/data
     environment:
@@ -38,7 +41,18 @@ services:
   frontend:
     build: ./frontend
     ports:
-      - "80:80"
+      - "80:80"    # HTTP — immediately redirects to HTTPS
+      - "443:443"  # HTTPS — all real traffic served here
+    volumes:
+      - bambu_certs:/etc/nginx/certs  # TLS cert persisted across restarts
+    environment:
+      # Set to your Pi's LAN IP and/or hostname so the auto-generated
+      # certificate includes them in its Subject Alternative Names.
+      # Browsers use the SAN to validate the cert — without this you will
+      # still get a one-time "proceed anyway" warning when accessing by IP.
+      # Example:
+      #   CERT_HOSTS=192.168.1.50,bambu.local
+      - CERT_HOSTS=${CERT_HOSTS:-}
     depends_on:
       backend:
         condition: service_healthy
@@ -46,3 +60,4 @@ services:
 
 volumes:
   bambu_data:
+  bambu_certs:   # Persists the TLS certificate across container rebuilds
