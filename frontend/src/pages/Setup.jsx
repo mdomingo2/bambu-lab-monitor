@@ -1,8 +1,9 @@
 import { useState } from 'react'
-import { PlusCircle, Pencil, Trash2, AlertCircle, Check, Video } from 'lucide-react'
+import { PlusCircle, Pencil, Trash2, AlertCircle, Check, Video, CloudDownload } from 'lucide-react'
 import { usePrinterStore } from '../store/printerStore'
 import { Dialog } from '../components/ui/Dialog'
 import { StatusBadge } from '../components/StatusBadge'
+import { BambuImportModal } from '../components/BambuImportModal'
 
 const MODELS = ['A1', 'P1S', 'P2S', 'H2D']
 // Models that default lan_mode=false:
@@ -145,6 +146,7 @@ export function Setup() {
   const [nameInput, setNameInput] = useState(farmName)
   const [nameSaved, setNameSaved] = useState(false)
   const [addOpen, setAddOpen] = useState(false)
+  const [importOpen, setImportOpen] = useState(false)
   const [editPrinter, setEditPrinter] = useState(null)
   const [saving, setSaving] = useState(false)
   const [formError, setFormError] = useState(null)
@@ -216,9 +218,18 @@ export function Setup() {
           <h1 className="text-2xl font-bold text-zinc-900 dark:text-zinc-100">Setup</h1>
           <p className="text-sm text-zinc-400 mt-0.5">Manage your print farm printers</p>
         </div>
-        <button className="btn-primary flex items-center gap-2 text-sm" onClick={() => { setFormError(null); setAddOpen(true) }}>
-          <PlusCircle size={16} />Add printer
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            className="btn-ghost flex items-center gap-1.5 text-sm border border-zinc-300 dark:border-zinc-700"
+            onClick={() => setImportOpen(true)}
+          >
+            <CloudDownload size={15} />
+            Import from Bambu Account
+          </button>
+          <button className="btn-primary flex items-center gap-2 text-sm" onClick={() => { setFormError(null); setAddOpen(true) }}>
+            <PlusCircle size={16} />Add printer
+          </button>
+        </div>
       </div>
 
       {/* Farm name */}
@@ -290,6 +301,12 @@ export function Setup() {
           )
         })()}
       </Dialog>
+
+      <BambuImportModal
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        onPrintersAdded={() => setImportOpen(false)}
+      />
 
       <Dialog open={!!deleteId} onClose={() => setDeleteId(null)} title="Delete printer" size="sm">
         <div className="p-6">

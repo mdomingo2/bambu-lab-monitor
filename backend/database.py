@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from sqlalchemy import text
 from sqlmodel import SQLModel, Session, create_engine, select
 
-from models import Printer, FarmSettings, PrintJob, DismissedAlert
+from models import Printer, FarmSettings, PrintJob, DismissedAlert, User
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:////app/data/bambu.db")
 
@@ -222,3 +222,51 @@ def get_print_history(limit: int = 200) -> list[PrintJob]:
                 select(PrintJob).order_by(PrintJob.started_at.desc()).limit(limit)
             ).all()
         )
+
+
+# ---------------------------------------------------------------------------
+# Users
+# ---------------------------------------------------------------------------
+
+def count_users() -> int:
+    """Return the total number of user accounts."""
+    with Session(engine) as session:
+        return len(session.exec(select(User)).all())
+
+
+def get_user(username: str) -> User | None:
+    """Fetch a user by username."""
+    with Session(engine) as session:
+        return session.exec(
+            select(User).where(User.username == username)
+        ).first()
+
+
+def create_user(username: str, hashed_password: str, role: str = "admin") -> User:
+    """Create a new user account."""
+    from datetime import datetime, timezone
+    user = User(
+        username=username,
+        hashed_password=hashed_password,
+        role=role,
+        created_at=datetime.now(timezone.utc).isoformat(),
+    )
+    with Session(engine) as session:
+        session.add(user)
+        session.commit()
+        session.refresh(user)
+    return user
+
+
+def update_user_password(username: str, hashed_password: str) -> bool:
+    """Update a user's password hash. Returns False if user not found."""
+    with Session(engine) as session:
+        user = session.exec(
+            select(User).where(User.username == username)
+        ).first()
+        if not user:
+            return False
+        user.hashed_password = hashed_password
+        session.add(user)
+        session.commit()
+    return True

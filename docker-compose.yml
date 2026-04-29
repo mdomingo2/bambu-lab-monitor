@@ -28,6 +28,12 @@ services:
     environment:
       - DATABASE_URL=sqlite:////app/data/bambu.db
       - GO2RTC_URL=http://go2rtc:1984
+      # First-run admin credentials.  Set these in a .env file alongside
+      # docker-compose.yml BEFORE the first start so you control the password.
+      # If APP_PASSWORD is empty, a random password is auto-generated and
+      # printed to the container logs on the very first boot.
+      - APP_USERNAME=${APP_USERNAME:-admin}
+      - APP_PASSWORD=${APP_PASSWORD:-}
     restart: unless-stopped
     depends_on:
       - go2rtc

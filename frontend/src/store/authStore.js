@@ -1,48 +1,60 @@
 /**
- * authStore — scaffold for future account-based authentication.
+ * Auth store — tracks whether the user is logged in and who they are.
  *
- * Currently unauthenticated: `isAuthenticated` is always true so all routes
- * are accessible without a login.  When auth is implemented, replace the
- * `login` and `logout` actions with real API calls and token management.
- *
- * Persisted to localStorage under "bambu-auth" so the session survives
- * page refreshes once login is wired up.
+ * The session token lives in an httpOnly cookie managed by the server, so
+ * JavaScript never sees it directly. Instead we call /api/auth/me on startup
+ * to check if an existing session cookie is still valid.
  */
 import { create } from 'zustand'
-import { persist } from 'zustand/middleware'
 
-export const useAuthStore = create(
-  persist(
-    (set) => ({
-      /** The authenticated user object, or null when logged out. */
-      user: null,
+export const useAuthStore = create((set) => ({
+  /**
+   * null   = not yet checked (app just loaded)
+   * false  = checked, no valid session
+   * object = {username, role} — authenticated
+   */
+  user: null,
+  checking: true,
 
-      /** Derived: true when a user session is active. */
-      get isAuthenticated() {
-        // TODO: return this.user !== null once login is implemented.
-        return true
-      },
-
-      /**
-       * Log in with username + password.
-       * TODO: replace with a real POST /api/auth/login call that returns a
-       * JWT or session token, then store the decoded user object here.
-       */
-      login: async (_username, _password) => {
-        // Placeholder — auth not yet implemented.
-        throw new Error('Authentication not yet implemented.')
-      },
-
-      /**
-       * Clear the current session.
-       * TODO: also call DELETE /api/auth/session (or clear the JWT cookie).
-       */
-      logout: () => set({ user: null }),
-    }),
-    {
-      name: 'bambu-auth',
-      // Only persist the user object, not action functions.
-      partialize: (state) => ({ user: state.user }),
+  /** Called once on app startup to see if an existing session cookie is valid. */
+  async checkAuth() {
+    try {
+      const r = await fetch('/api/auth/me', { credentials: 'include' })
+      if (r.ok) {
+        const user = await r.json()
+        set({ user, checking: false })
+      } else {
+        set({ user: false, checking: false })
+      }
+    } catch {
+      set({ user: false, checking: false })
     }
-  )
-)
+  },
+
+  /** Log in with username + password. Returns null on success, error string on failure. */
+  async login(username, password) {
+    try {
+      const r = await fetch('/api/auth/login', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+      })
+      if (r.ok) {
+        const user = await r.json()
+        set({ user, checking: false })
+        return null
+      }
+      const body = await r.json().catch(() => ({}))
+      return body.detail || 'Login failed'
+    } catch {
+      return 'Network error — check your connection'
+    }
+  },
+
+  /** Log out and clear the session cookie. */
+  async logout() {
+    await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' })
+    set({ user: false, checking: false })
+  },
+}))

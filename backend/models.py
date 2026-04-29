@@ -123,6 +123,30 @@ class AlertDismiss(BaseModel):
     hms_code: str   # e.g. HMS_0500-0500-0001-0007
 
 
+class UserLogin(BaseModel):
+    username: str
+    password: str
+
+
+class PasswordChange(BaseModel):
+    current_password: str
+    new_password: str
+
+
+class BambuCloudLoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+class BambuCloudVerifyRequest(BaseModel):
+    tfa_key: str
+    code: str
+
+
+class BambuCloudDevicesRequest(BaseModel):
+    token: str
+
+
 # ---------------------------------------------------------------------------
 # Live status models (in-memory only, not persisted)
 # ---------------------------------------------------------------------------

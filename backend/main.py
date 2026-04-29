@@ -8,25 +8,36 @@ Responsibilities:
   - Proxy light/print-control commands back to printers via MQTT
   - Register printer RTSP streams with go2rtc for WebRTC camera viewing
   - Track print history and broadcast lifecycle events over WebSocket
+  - Session auth via httpOnly JWT cookies (auth.py)
+  - Bambu cloud account integration (bambu_cloud.py)
 """
 
 import asyncio
 import logging
 import os
+import secrets
 from contextlib import asynccontextmanager
 from typing import Set
 
 import httpx
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import (
+    APIRouter, Depends, FastAPI, HTTPException,
+    Response, WebSocket, WebSocketDisconnect,
+)
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import Response as FastAPIResponse
 
+import auth
+import bambu_cloud
 import database as db
 import ftps
 import thumbnail
 from models import (
-    Printer, PrinterCreate, PrinterUpdate,
-    PrinterStatus, PrintControl, LightControl, SettingsUpdate, AlertDismiss,
+    AlertDismiss, BambuCloudDevicesRequest,
+    BambuCloudLoginRequest, BambuCloudVerifyRequest,
+    LightControl, PasswordChange, Printer,
+    PrintControl, PrinterCreate, PrinterUpdate,
+    PrinterStatus, SettingsUpdate, UserLogin,
 )
 from mqtt_manager import MQTTManager
 
@@ -99,23 +110,15 @@ async def broadcast(msg: dict) -> None:
 # ---------------------------------------------------------------------------
 
 def on_printer_status(status: PrinterStatus) -> None:
-    """Handle a status update from the MQTT manager.
-
-    Detects print start / end transitions, writes history records, and
-    broadcasts both lifecycle events and raw status updates to WS clients.
-    Called from a background thread — uses run_coroutine_threadsafe.
-    """
+    """Handle a status update from the MQTT manager."""
     prev = status_cache.get(status.printer_id, {})
     prev_state = prev.get("gcode_state", "OFFLINE")
     curr_state = status.gcode_state
     loop = app.state.loop
 
-    # Clear thumbnail cache whenever the active file changes so the next
-    # request always fetches a fresh image for the new job.
     if prev.get("current_file") != status.current_file:
         thumbnail.cache.pop(status.printer_id, None)
 
-    # Print started
     if prev_state != "RUNNING" and curr_state == "RUNNING":
         printer = db.get_printer(status.printer_id)
         name = printer.name if printer else status.printer_id
@@ -131,7 +134,6 @@ def on_printer_status(status: PrinterStatus) -> None:
             loop,
         )
 
-    # Print ended (any terminal state after RUNNING)
     elif prev_state == "RUNNING" and curr_state in ("FINISH", "FAILED", "IDLE"):
         job_id = _print_sessions.pop(status.printer_id, None)
         final = (
@@ -170,6 +172,20 @@ async def lifespan(app: FastAPI):
     db.init_db()
     db.abandon_running_jobs()
 
+    # Ensure at least one admin user exists on first boot.
+    if db.count_users() == 0:
+        username = os.getenv("APP_USERNAME", "admin")
+        password = os.getenv("APP_PASSWORD", "")
+        if not password:
+            password = secrets.token_urlsafe(14)
+            logger.warning("=" * 60)
+            logger.warning("  FIRST-RUN ADMIN CREDENTIALS")
+            logger.warning(f"  Username : {username}")
+            logger.warning(f"  Password : {password}")
+            logger.warning("  Set APP_PASSWORD in your .env to use a fixed password.")
+            logger.warning("=" * 60)
+        db.create_user(username, auth.hash_password(password))
+
     global mqtt_manager
     mqtt_manager = MQTTManager(on_printer_status)
 
@@ -188,21 +204,52 @@ app = FastAPI(title="Bambu Farm Monitor", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 
 # ---------------------------------------------------------------------------
-# Printer CRUD
+# Auth endpoints  (public — no require_auth)
 # ---------------------------------------------------------------------------
 
-@app.get("/api/printers")
+@app.post("/api/auth/login")
+def login(data: UserLogin, response: Response):
+    user = db.get_user(data.username)
+    if not user or not auth.verify_password(data.password, user.hashed_password):
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+    auth.set_auth_cookie(response, user.username)
+    return {"username": user.username, "role": user.role}
+
+
+@app.post("/api/auth/logout")
+def logout(response: Response):
+    auth.clear_auth_cookie(response)
+    return {"ok": True}
+
+
+@app.get("/api/auth/me")
+def me(current_user=Depends(auth.require_auth)):
+    return {"username": current_user.username, "role": current_user.role}
+
+
+# ---------------------------------------------------------------------------
+# Protected API router
+# All routes below require a valid session cookie.
+# ---------------------------------------------------------------------------
+
+router = APIRouter(dependencies=[Depends(auth.require_auth)])
+
+
+# ── Printer CRUD ─────────────────────────────────────────────────────────────
+
+@router.get("/api/printers")
 def list_printers():
     return [p.model_dump() for p in db.get_all_printers()]
 
 
-@app.post("/api/printers", status_code=201)
+@router.post("/api/printers", status_code=201)
 async def add_printer(data: PrinterCreate):
     printer = Printer(**data.model_dump())
     saved = db.create_printer(printer)
@@ -212,7 +259,7 @@ async def add_printer(data: PrinterCreate):
     return saved.model_dump()
 
 
-@app.get("/api/printers/{printer_id}")
+@router.get("/api/printers/{printer_id}")
 def get_printer(printer_id: str):
     p = db.get_printer(printer_id)
     if not p:
@@ -220,7 +267,7 @@ def get_printer(printer_id: str):
     return p.model_dump()
 
 
-@app.patch("/api/printers/{printer_id}")
+@router.patch("/api/printers/{printer_id}")
 async def update_printer(printer_id: str, data: PrinterUpdate):
     updates = {k: v for k, v in data.model_dump().items() if v is not None}
     p = db.update_printer(printer_id, updates)
@@ -232,7 +279,7 @@ async def update_printer(printer_id: str, data: PrinterUpdate):
     return p.model_dump()
 
 
-@app.delete("/api/printers/{printer_id}", status_code=204)
+@router.delete("/api/printers/{printer_id}", status_code=204)
 async def delete_printer(printer_id: str):
     success = db.delete_printer(printer_id)
     if not success:
@@ -243,16 +290,14 @@ async def delete_printer(printer_id: str):
     await broadcast({"type": "printers_update", "data": {"action": "delete", "printer_id": printer_id}})
 
 
-# ---------------------------------------------------------------------------
-# Settings
-# ---------------------------------------------------------------------------
+# ── Settings ─────────────────────────────────────────────────────────────────
 
-@app.get("/api/settings")
+@router.get("/api/settings")
 def get_settings_endpoint():
     return db.get_settings()
 
 
-@app.patch("/api/settings")
+@router.patch("/api/settings")
 async def update_settings(data: SettingsUpdate):
     if data.farm_name is not None:
         db.set_setting("farm_name", data.farm_name)
@@ -261,11 +306,21 @@ async def update_settings(data: SettingsUpdate):
     return settings
 
 
-# ---------------------------------------------------------------------------
-# Thumbnails
-# ---------------------------------------------------------------------------
+# ── Account management ───────────────────────────────────────────────────────
 
-@app.get("/api/printers/{printer_id}/thumbnail")
+@router.post("/api/auth/change-password")
+def change_password(data: PasswordChange, current_user=Depends(auth.require_auth)):  # noqa: B008
+    if not auth.verify_password(data.current_password, current_user.hashed_password):
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+    if len(data.new_password) < 8:
+        raise HTTPException(status_code=400, detail="New password must be at least 8 characters")
+    db.update_user_password(current_user.username, auth.hash_password(data.new_password))
+    return {"ok": True}
+
+
+# ── Thumbnails ───────────────────────────────────────────────────────────────
+
+@router.get("/api/printers/{printer_id}/thumbnail")
 async def get_thumbnail(printer_id: str):
     p = db.get_printer(printer_id)
     if not p:
@@ -283,8 +338,6 @@ async def get_thumbnail(printer_id: str):
         None, thumbnail.fetch_sync, printer_id, p.ip, p.access_code, cover, gcode, subtask
     )
 
-    # FTPS thumbnail unavailable — fall back to a live camera snapshot for
-    # printers that have LAN Mode enabled (go2rtc stream is reachable).
     if not data and p.lan_mode:
         data = await thumbnail.snapshot_from_camera(printer_id)
         if data:
@@ -294,12 +347,11 @@ async def get_thumbnail(printer_id: str):
         raise HTTPException(status_code=404, detail="Thumbnail unavailable")
 
     content_type = "image/png" if data[:4] == b"\x89PNG" else "image/jpeg"
-    return Response(content=data, media_type=content_type)
+    return FastAPIResponse(content=data, media_type=content_type)
 
 
-@app.get("/api/printers/{printer_id}/thumbnail/debug")
+@router.get("/api/printers/{printer_id}/thumbnail/debug")
 async def debug_thumbnail(printer_id: str):
-    """Diagnostic endpoint: returns MQTT state and FTPS directory listings."""
     p = db.get_printer(printer_id)
     if not p:
         raise HTTPException(status_code=404, detail="Printer not found")
@@ -317,11 +369,9 @@ async def debug_thumbnail(printer_id: str):
     }
 
 
-# ---------------------------------------------------------------------------
-# Print controls
-# ---------------------------------------------------------------------------
+# ── Print controls ───────────────────────────────────────────────────────────
 
-@app.post("/api/printers/{printer_id}/control")
+@router.post("/api/printers/{printer_id}/control")
 async def control_print(printer_id: str, data: PrintControl):
     p = db.get_printer(printer_id)
     if not p:
@@ -337,7 +387,7 @@ async def control_print(printer_id: str, data: PrintControl):
     return {"ok": True, "action": action}
 
 
-@app.post("/api/printers/{printer_id}/light")
+@router.post("/api/printers/{printer_id}/light")
 async def control_light(printer_id: str, data: LightControl):
     p = db.get_printer(printer_id)
     if not p:
@@ -364,16 +414,14 @@ async def control_light(printer_id: str, data: LightControl):
     return {"ok": True, "mode": mode}
 
 
-# ---------------------------------------------------------------------------
-# Dismissed HMS alerts
-# ---------------------------------------------------------------------------
+# ── Dismissed HMS alerts ─────────────────────────────────────────────────────
 
-@app.get("/api/printers/{printer_id}/dismissed-alerts")
+@router.get("/api/printers/{printer_id}/dismissed-alerts")
 def list_dismissed_alerts(printer_id: str):
     return {"dismissed": db.get_dismissed_alerts(printer_id)}
 
 
-@app.post("/api/printers/{printer_id}/dismissed-alerts", status_code=201)
+@router.post("/api/printers/{printer_id}/dismissed-alerts", status_code=201)
 async def dismiss_alert(printer_id: str, data: AlertDismiss):
     p = db.get_printer(printer_id)
     if not p:
@@ -387,7 +435,7 @@ async def dismiss_alert(printer_id: str, data: AlertDismiss):
     return {"dismissed": dismissed}
 
 
-@app.delete("/api/printers/{printer_id}/dismissed-alerts/{hms_code}", status_code=200)
+@router.delete("/api/printers/{printer_id}/dismissed-alerts/{hms_code}", status_code=200)
 async def undismiss_alert(printer_id: str, hms_code: str):
     p = db.get_printer(printer_id)
     if not p:
@@ -401,11 +449,9 @@ async def undismiss_alert(printer_id: str, hms_code: str):
     return {"dismissed": dismissed}
 
 
-# ---------------------------------------------------------------------------
-# Timelapses
-# ---------------------------------------------------------------------------
+# ── Timelapses ───────────────────────────────────────────────────────────────
 
-@app.get("/api/printers/{printer_id}/timelapses")
+@router.get("/api/printers/{printer_id}/timelapses")
 async def list_timelapses(printer_id: str):
     p = db.get_printer(printer_id)
     if not p:
@@ -424,15 +470,14 @@ async def list_timelapses(printer_id: str):
     return {"files": files}
 
 
-@app.get("/api/printers/{printer_id}/timelapses/{filename}/thumb")
+@router.get("/api/printers/{printer_id}/timelapses/{filename}/thumb")
 async def timelapse_thumb(printer_id: str, filename: str):
-    """Return a JPEG poster frame from the first 8 MB of the timelapse video."""
     if "/" in filename or ".." in filename:
         raise HTTPException(status_code=400, detail="Invalid filename")
 
     cache_key = f"{printer_id}:{filename}"
     if cache_key in thumbnail.cache:
-        return Response(content=thumbnail.cache[cache_key], media_type="image/jpeg")
+        return FastAPIResponse(content=thumbnail.cache[cache_key], media_type="image/jpeg")
 
     p = db.get_printer(printer_id)
     if not p:
@@ -447,10 +492,10 @@ async def timelapse_thumb(printer_id: str, filename: str):
         raise HTTPException(status_code=404, detail="Thumbnail unavailable")
 
     thumbnail.cache[cache_key] = jpeg
-    return Response(content=jpeg, media_type="image/jpeg")
+    return FastAPIResponse(content=jpeg, media_type="image/jpeg")
 
 
-@app.get("/api/printers/{printer_id}/timelapses/{filename}")
+@router.get("/api/printers/{printer_id}/timelapses/{filename}")
 async def download_timelapse(printer_id: str, filename: str):
     p = db.get_printer(printer_id)
     if not p:
@@ -464,46 +509,91 @@ async def download_timelapse(printer_id: str, filename: str):
     if not data:
         raise HTTPException(status_code=404, detail="File not found")
 
-    return Response(
+    return FastAPIResponse(
         content=data,
         media_type="video/mp4",
         headers={"Content-Disposition": f'inline; filename="{filename}"'},
     )
 
 
-# ---------------------------------------------------------------------------
-# History & status
-# ---------------------------------------------------------------------------
+# ── History & status ─────────────────────────────────────────────────────────
 
-@app.get("/api/history")
+@router.get("/api/history")
 def get_history():
     return [j.model_dump() for j in db.get_print_history()]
 
 
-@app.get("/api/status")
+@router.get("/api/status")
 def get_all_statuses():
     return status_cache
 
 
-@app.get("/api/status/{printer_id}")
+@router.get("/api/status/{printer_id}")
 def get_printer_status(printer_id: str):
     if printer_id in status_cache:
         return status_cache[printer_id]
     raise HTTPException(status_code=404, detail="Status not found")
 
 
+# ── Bambu cloud integration ───────────────────────────────────────────────────
+
+@router.post("/api/bambu-cloud/login")
+def bambu_cloud_login(data: BambuCloudLoginRequest):
+    """Authenticate with Bambu cloud. Returns a token or a 2FA challenge."""
+    result = bambu_cloud.login(data.email, data.password)
+    if result.error:
+        raise HTTPException(status_code=400, detail=result.error)
+    return {
+        "needs_2fa": result.needs_2fa,
+        "tfa_key": result.tfa_key,
+        "token": result.token,
+    }
+
+
+@router.post("/api/bambu-cloud/verify")
+def bambu_cloud_verify(data: BambuCloudVerifyRequest):
+    """Submit 2FA verification code and get an access token."""
+    result = bambu_cloud.verify_2fa(data.tfa_key, data.code)
+    if result.error:
+        raise HTTPException(status_code=400, detail=result.error)
+    return {"token": result.token}
+
+
+@router.post("/api/bambu-cloud/devices")
+def bambu_cloud_devices(data: BambuCloudDevicesRequest):
+    """Fetch devices for an authenticated Bambu cloud account."""
+    try:
+        devices = bambu_cloud.get_devices(data.token)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {
+        "devices": [
+            {
+                "serial":       d.dev_id,
+                "name":         d.name,
+                "model":        d.model_label,
+                "access_code":  d.dev_access_code,
+                "product_name": d.dev_product_name,
+                "online":       d.online,
+                "lan_mode":     d.lan_mode_default,
+            }
+            for d in devices
+        ]
+    }
+
+
 # ---------------------------------------------------------------------------
-# WebSocket
+# WebSocket  (auth via cookie; no APIRouter dependency injection for WS)
 # ---------------------------------------------------------------------------
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    """Persistent WebSocket for real-time status and event updates.
+    # Validate session cookie before accepting the connection.
+    token = websocket.cookies.get(auth.COOKIE_NAME)
+    if not token or not auth.decode_token(token):
+        await websocket.close(code=4001)
+        return
 
-    On connect, sends an 'init' payload with all printer configs, current
-    statuses, and settings. Subsequent messages are broadcast by
-    on_printer_status and the CRUD endpoints.
-    """
     await websocket.accept()
     ws_clients.add(websocket)
     try:
@@ -517,8 +607,15 @@ async def websocket_endpoint(websocket: WebSocket):
             },
         })
         while True:
-            await websocket.receive_text()   # keep connection alive
+            await websocket.receive_text()
     except WebSocketDisconnect:
         pass
     finally:
         ws_clients.discard(websocket)
+
+
+# ---------------------------------------------------------------------------
+# Register protected router
+# ---------------------------------------------------------------------------
+
+app.include_router(router)

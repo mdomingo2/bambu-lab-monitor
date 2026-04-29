@@ -16,6 +16,7 @@ os.environ["DATABASE_URL"] = "sqlite://"
 
 import pytest
 from unittest.mock import patch, AsyncMock
+from fastapi import Depends
 from fastapi.testclient import TestClient
 from sqlmodel import SQLModel, Session, create_engine, select, text
 from sqlmodel.pool import StaticPool
@@ -54,6 +55,9 @@ def client():
     MQTT PrinterConnection.start is patched so no background threads are
     spawned, and go2rtc helpers are patched with AsyncMock so the lifespan
     does not attempt real HTTP calls.
+
+    auth.require_auth is overridden to return a dummy admin user so API
+    tests don't need to set up real session cookies.
     """
     with (
         patch("mqtt_manager.PrinterConnection.start"),
@@ -61,9 +65,26 @@ def client():
         patch("main._go2rtc_delete", new=AsyncMock()),
     ):
         from main import app
+        import auth
+        from models import User
+
+        # Bypass auth for all tests — return a synthetic admin user.
+        def _fake_auth():
+            return User(
+                id="test-user-id",
+                username="testadmin",
+                hashed_password="",
+                role="admin",
+                created_at="",
+            )
+
+        app.dependency_overrides[auth.require_auth] = _fake_auth
+
         SQLModel.metadata.create_all(_TEST_ENGINE)
         with TestClient(app) as c:
             yield c
+
+        app.dependency_overrides.clear()
 
 
 # ── Per-test DB isolation ─────────────────────────────────────────────────────

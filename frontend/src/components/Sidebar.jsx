@@ -1,13 +1,21 @@
-import { NavLink } from 'react-router-dom'
-import { LayoutGrid, Settings, Wifi, WifiOff, Sun, Moon, History } from 'lucide-react'
+import { NavLink, useNavigate } from 'react-router-dom'
+import { LayoutGrid, Settings, Wifi, WifiOff, Sun, Moon, History, LogOut } from 'lucide-react'
 import { usePrinterStore } from '../store/printerStore'
 import { useUnitStore } from '../store/unitStore'
+import { useAuthStore } from '../store/authStore'
 import { clsx } from 'clsx'
 
 export function Sidebar({ onThemeToggle, theme }) {
   const connected      = usePrinterStore((s) => s.connected)
   const tempUnit       = useUnitStore((s) => s.tempUnit)
   const toggleTempUnit = useUnitStore((s) => s.toggleTempUnit)
+  const logout         = useAuthStore((s) => s.logout)
+  const navigate       = useNavigate()
+
+  const handleLogout = async () => {
+    await logout()
+    navigate('/login', { replace: true })
+  }
 
   return (
     <aside className="w-16 shrink-0 bg-white border-r border-zinc-200 dark:bg-zinc-950 dark:border-zinc-800 flex flex-col items-center py-4 gap-2">
@@ -77,6 +85,15 @@ export function Sidebar({ onThemeToggle, theme }) {
           }
           <span className="text-[9px] text-zinc-400">{connected ? 'Live' : 'Off'}</span>
         </div>
+
+        {/* Logout */}
+        <button
+          onClick={handleLogout}
+          className="btn-ghost p-2 text-zinc-400 hover:text-red-500 dark:hover:text-red-400"
+          title="Sign out"
+        >
+          <LogOut size={16} />
+        </button>
       </div>
     </aside>
   )
