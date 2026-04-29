@@ -1,16 +1,15 @@
-import { useState } from 'react'
-import { PlusCircle, Pencil, Trash2, AlertCircle, Check, Video, CloudDownload } from 'lucide-react'
+import { useState, useEffect, useCallback } from 'react'
+import { PlusCircle, Pencil, Trash2, AlertCircle, Check, Video, CloudDownload, UserPlus, KeyRound, ShieldCheck, Eye } from 'lucide-react'
 import { usePrinterStore } from '../store/printerStore'
+import { useAuthStore } from '../store/authStore'
 import { Dialog } from '../components/ui/Dialog'
 import { StatusBadge } from '../components/StatusBadge'
 import { BambuImportModal } from '../components/BambuImportModal'
 
 const MODELS = ['A1', 'P1S', 'P2S', 'H2D']
-// Models that default lan_mode=false:
-//   A1  — cameras are cloud-only, RTSP on port 322 is not supported
-//   P1S — LAN Mode must be explicitly enabled on the printer; off by default
 const MODEL_LAN_DEFAULT = { A1: false, P1S: false, P2S: true, H2D: true }
 const EMPTY_FORM = { name: '', model: 'P1S', ip: '', serial: '', access_code: '', lan_mode: false }
+const EMPTY_USER_FORM = { username: '', password: '', role: 'admin' }
 
 async function apiRequest(url, options) {
   const res = await fetch(url, options)
@@ -31,19 +30,18 @@ function ErrorBanner({ error }) {
   )
 }
 
+// ---------------------------------------------------------------------------
+// Printer form
+// ---------------------------------------------------------------------------
+
 function PrinterForm({ initial = EMPTY_FORM, onSave, onCancel, saving, error }) {
   const [form, setForm] = useState(initial)
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }))
   const valid = form.name.trim() && form.ip.trim() && form.serial.trim() && form.access_code.trim()
 
-  // When model changes, reset lan_mode to the model's default.
   const handleModelChange = (e) => {
     const model = e.target.value
-    setForm((f) => ({
-      ...f,
-      model,
-      lan_mode: MODEL_LAN_DEFAULT[model] ?? true,
-    }))
+    setForm((f) => ({ ...f, model, lan_mode: MODEL_LAN_DEFAULT[model] ?? true }))
   }
 
   const isA1 = form.model === 'A1'
@@ -88,12 +86,9 @@ function PrinterForm({ initial = EMPTY_FORM, onSave, onCancel, saving, error }) 
             value={form.access_code}
             onChange={set('access_code')}
           />
-          <p className="text-xs text-zinc-400 mt-1">
-            Found on the printer touchscreen under Settings → Network
-          </p>
+          <p className="text-xs text-zinc-400 mt-1">Found on the printer touchscreen under Settings → Network</p>
         </div>
 
-        {/* LAN Mode toggle */}
         <div className={`flex items-start gap-3 p-3 rounded-lg border ${
           isA1
             ? 'bg-zinc-50 dark:bg-zinc-800/30 border-zinc-200 dark:border-zinc-700 opacity-60'
@@ -138,11 +133,344 @@ function PrinterForm({ initial = EMPTY_FORM, onSave, onCancel, saving, error }) 
   )
 }
 
+// ---------------------------------------------------------------------------
+// Role badge
+// ---------------------------------------------------------------------------
+
+function RoleBadge({ role }) {
+  if (role === 'admin') {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs font-medium px-1.5 py-0.5 rounded bg-violet-100 dark:bg-violet-900/30 text-violet-700 dark:text-violet-300">
+        <ShieldCheck size={11} />Admin
+      </span>
+    )
+  }
+  return (
+    <span className="inline-flex items-center gap-1 text-xs font-medium px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400">
+      <Eye size={11} />Viewer
+    </span>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// User management section
+// ---------------------------------------------------------------------------
+
+function UsersSection({ currentUsername }) {
+  const [users, setUsers]           = useState([])
+  const [loading, setLoading]       = useState(true)
+  const [addOpen, setAddOpen]       = useState(false)
+  const [resetUser, setResetUser]   = useState(null)  // username string
+  const [deleteUser, setDeleteUser] = useState(null)  // username string
+  const [saving, setSaving]         = useState(false)
+  const [error, setError]           = useState(null)
+
+  // Own password change
+  const [pwOpen, setPwOpen]   = useState(false)
+  const [pwForm, setPwForm]   = useState({ current_password: '', new_password: '', confirm: '' })
+  const [pwSaved, setPwSaved] = useState(false)
+
+  const fetchUsers = useCallback(async () => {
+    try {
+      const data = await apiRequest('/api/users')
+      setUsers(data)
+    } catch (err) {
+      console.error('Failed to load users:', err)
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => { fetchUsers() }, [fetchUsers])
+
+  // ── Add user ──────────────────────────────────────────────────────────────
+
+  const [addForm, setAddForm] = useState(EMPTY_USER_FORM)
+  const setAdd = (k) => (e) => setAddForm((f) => ({ ...f, [k]: e.target.value }))
+  const addValid = addForm.username.trim() && addForm.password.length >= 8
+
+  const handleAdd = async () => {
+    setSaving(true)
+    setError(null)
+    try {
+      await apiRequest('/api/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(addForm),
+      })
+      setAddOpen(false)
+      setAddForm(EMPTY_USER_FORM)
+      fetchUsers()
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  // ── Delete user ───────────────────────────────────────────────────────────
+
+  const handleDelete = async () => {
+    try {
+      await apiRequest(`/api/users/${encodeURIComponent(deleteUser)}`, { method: 'DELETE' })
+      setDeleteUser(null)
+      fetchUsers()
+    } catch (err) {
+      setError(err.message)
+      setDeleteUser(null)
+    }
+  }
+
+  // ── Admin reset password ──────────────────────────────────────────────────
+
+  const [resetPw, setResetPw] = useState('')
+  const resetValid = resetPw.length >= 8
+
+  const handleReset = async () => {
+    setSaving(true)
+    setError(null)
+    try {
+      await apiRequest(`/api/users/${encodeURIComponent(resetUser)}/password`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ new_password: resetPw }),
+      })
+      setResetUser(null)
+      setResetPw('')
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  // ── Own password change ───────────────────────────────────────────────────
+
+  const pwValid = pwForm.current_password && pwForm.new_password.length >= 8 && pwForm.new_password === pwForm.confirm
+  const setPw = (k) => (e) => setPwForm((f) => ({ ...f, [k]: e.target.value }))
+
+  const handleChangeOwnPassword = async () => {
+    setSaving(true)
+    setError(null)
+    try {
+      await apiRequest('/api/auth/change-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ current_password: pwForm.current_password, new_password: pwForm.new_password }),
+      })
+      setPwOpen(false)
+      setPwForm({ current_password: '', new_password: '', confirm: '' })
+      setPwSaved(true)
+      setTimeout(() => setPwSaved(false), 3000)
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="card p-4 mb-6">
+      <div className="flex items-center justify-between mb-3">
+        <p className="text-xs font-medium text-zinc-500 dark:text-zinc-400 uppercase tracking-wide">Users</p>
+        <button
+          className="btn-ghost flex items-center gap-1.5 text-xs px-2 py-1 border border-zinc-300 dark:border-zinc-700"
+          onClick={() => { setError(null); setAddForm(EMPTY_USER_FORM); setAddOpen(true) }}
+        >
+          <UserPlus size={13} />
+          Add user
+        </button>
+      </div>
+
+      {error && (
+        <div className="mb-3 flex items-start gap-2 bg-red-100 dark:bg-red-900/30 border border-red-300 dark:border-red-800 text-red-700 dark:text-red-300 rounded-lg px-3 py-2 text-sm">
+          <AlertCircle size={14} className="shrink-0 mt-0.5" />
+          <span>{error}</span>
+        </div>
+      )}
+
+      {loading ? (
+        <p className="text-sm text-zinc-400 py-2">Loading…</p>
+      ) : (
+        <div className="flex flex-col divide-y divide-zinc-100 dark:divide-zinc-800">
+          {users.map((u) => {
+            const isSelf = u.username === currentUsername
+            return (
+              <div key={u.username} className="flex items-center gap-3 py-2.5 first:pt-0 last:pb-0">
+                {/* Avatar initial */}
+                <div className="w-7 h-7 rounded-full bg-violet-100 dark:bg-violet-900/40 flex items-center justify-center text-violet-700 dark:text-violet-300 text-xs font-semibold shrink-0 select-none">
+                  {u.username[0].toUpperCase()}
+                </div>
+
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium text-zinc-800 dark:text-zinc-100">{u.username}</span>
+                    {isSelf && <span className="text-xs text-zinc-400">(you)</span>}
+                    <RoleBadge role={u.role} />
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-1 shrink-0">
+                  {isSelf ? (
+                    /* Own account: change password with current-password verification */
+                    <button
+                      className="btn-ghost p-1.5 text-xs flex items-center gap-1"
+                      title="Change my password"
+                      onClick={() => { setError(null); setPwForm({ current_password: '', new_password: '', confirm: '' }); setPwOpen(true) }}
+                    >
+                      <KeyRound size={13} />
+                      {pwSaved ? <Check size={12} className="text-emerald-500" /> : null}
+                    </button>
+                  ) : (
+                    /* Other accounts: admin reset password */
+                    <button
+                      className="btn-ghost p-1.5"
+                      title={`Reset ${u.username}'s password`}
+                      onClick={() => { setError(null); setResetPw(''); setResetUser(u.username) }}
+                    >
+                      <KeyRound size={13} />
+                    </button>
+                  )}
+
+                  {!isSelf && (
+                    <button
+                      className="btn-ghost p-1.5 text-red-500 hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20"
+                      title={`Delete ${u.username}`}
+                      onClick={() => { setError(null); setDeleteUser(u.username) }}
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  )}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {/* ── Add user dialog ── */}
+      <Dialog open={addOpen} onClose={() => setAddOpen(false)} title="Add user">
+        <div className="p-6 flex flex-col gap-4">
+          <div>
+            <label className="label">Username</label>
+            <input className="input" placeholder="e.g. justin" value={addForm.username} onChange={setAdd('username')} autoComplete="off" />
+          </div>
+          <div>
+            <label className="label">Password</label>
+            <input className="input" type="password" placeholder="8+ characters" value={addForm.password} onChange={setAdd('password')} autoComplete="new-password" />
+          </div>
+          <div>
+            <label className="label">Role</label>
+            <select className="input" value={addForm.role} onChange={setAdd('role')}>
+              <option value="admin">Admin — full access</option>
+              <option value="viewer">Viewer — read-only</option>
+            </select>
+          </div>
+          {error && (
+            <div className="flex items-start gap-2 bg-red-100 dark:bg-red-900/30 border border-red-300 dark:border-red-800 text-red-700 dark:text-red-300 rounded-lg px-3 py-2 text-sm">
+              <AlertCircle size={14} className="shrink-0 mt-0.5" /><span>{error}</span>
+            </div>
+          )}
+          <div className="flex justify-end gap-3 pt-2 border-t border-zinc-200 dark:border-zinc-800">
+            <button className="btn-ghost" onClick={() => setAddOpen(false)} disabled={saving}>Cancel</button>
+            <button className="btn-primary flex items-center gap-1.5" disabled={!addValid || saving} onClick={handleAdd}>
+              <UserPlus size={14} />
+              {saving ? 'Creating…' : 'Create user'}
+            </button>
+          </div>
+        </div>
+      </Dialog>
+
+      {/* ── Admin reset password dialog ── */}
+      <Dialog open={!!resetUser} onClose={() => setResetUser(null)} title={`Reset password — ${resetUser}`} size="sm">
+        <div className="p-6 flex flex-col gap-4">
+          <p className="text-sm text-zinc-500 dark:text-zinc-400">Set a new password for <strong className="text-zinc-800 dark:text-zinc-200">{resetUser}</strong>.</p>
+          <div>
+            <label className="label">New password</label>
+            <input
+              className="input"
+              type="password"
+              placeholder="8+ characters"
+              value={resetPw}
+              onChange={(e) => setResetPw(e.target.value)}
+              autoComplete="new-password"
+            />
+          </div>
+          {error && (
+            <div className="flex items-start gap-2 bg-red-100 dark:bg-red-900/30 border border-red-300 dark:border-red-800 text-red-700 dark:text-red-300 rounded-lg px-3 py-2 text-sm">
+              <AlertCircle size={14} className="shrink-0 mt-0.5" /><span>{error}</span>
+            </div>
+          )}
+          <div className="flex justify-end gap-3 pt-2 border-t border-zinc-200 dark:border-zinc-800">
+            <button className="btn-ghost" onClick={() => setResetUser(null)} disabled={saving}>Cancel</button>
+            <button className="btn-primary flex items-center gap-1.5" disabled={!resetValid || saving} onClick={handleReset}>
+              <KeyRound size={14} />
+              {saving ? 'Saving…' : 'Set password'}
+            </button>
+          </div>
+        </div>
+      </Dialog>
+
+      {/* ── Own change-password dialog ── */}
+      <Dialog open={pwOpen} onClose={() => setPwOpen(false)} title="Change my password" size="sm">
+        <div className="p-6 flex flex-col gap-4">
+          <div>
+            <label className="label">Current password</label>
+            <input className="input" type="password" value={pwForm.current_password} onChange={setPw('current_password')} autoComplete="current-password" />
+          </div>
+          <div>
+            <label className="label">New password</label>
+            <input className="input" type="password" placeholder="8+ characters" value={pwForm.new_password} onChange={setPw('new_password')} autoComplete="new-password" />
+          </div>
+          <div>
+            <label className="label">Confirm new password</label>
+            <input className="input" type="password" placeholder="Repeat new password" value={pwForm.confirm} onChange={setPw('confirm')} autoComplete="new-password" />
+            {pwForm.confirm && pwForm.new_password !== pwForm.confirm && (
+              <p className="text-xs text-red-500 mt-1">Passwords don't match</p>
+            )}
+          </div>
+          {error && (
+            <div className="flex items-start gap-2 bg-red-100 dark:bg-red-900/30 border border-red-300 dark:border-red-800 text-red-700 dark:text-red-300 rounded-lg px-3 py-2 text-sm">
+              <AlertCircle size={14} className="shrink-0 mt-0.5" /><span>{error}</span>
+            </div>
+          )}
+          <div className="flex justify-end gap-3 pt-2 border-t border-zinc-200 dark:border-zinc-800">
+            <button className="btn-ghost" onClick={() => setPwOpen(false)} disabled={saving}>Cancel</button>
+            <button className="btn-primary flex items-center gap-1.5" disabled={!pwValid || saving} onClick={handleChangeOwnPassword}>
+              <KeyRound size={14} />
+              {saving ? 'Saving…' : 'Update password'}
+            </button>
+          </div>
+        </div>
+      </Dialog>
+
+      {/* ── Delete user confirmation ── */}
+      <Dialog open={!!deleteUser} onClose={() => setDeleteUser(null)} title="Delete user" size="sm">
+        <div className="p-6">
+          <p className="text-zinc-500 dark:text-zinc-400 mb-6">
+            Delete <strong className="text-zinc-800 dark:text-zinc-200">{deleteUser}</strong>? They will be immediately logged out and unable to sign in.
+          </p>
+          <div className="flex justify-end gap-3">
+            <button className="btn-ghost" onClick={() => setDeleteUser(null)}>Cancel</button>
+            <button className="btn-danger" onClick={handleDelete}>Delete user</button>
+          </div>
+        </div>
+      </Dialog>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Main Setup page
+// ---------------------------------------------------------------------------
+
 export function Setup() {
   const printers = usePrinterStore((s) => s.printers)
   const statuses = usePrinterStore((s) => s.statuses)
   const farmName = usePrinterStore((s) => s.farmName)
   const setFarmName = usePrinterStore((s) => s.setFarmName)
+  const currentUser = useAuthStore((s) => s.user)
+
   const [nameInput, setNameInput] = useState(farmName)
   const [nameSaved, setNameSaved] = useState(false)
   const [addOpen, setAddOpen] = useState(false)
@@ -216,7 +544,7 @@ export function Setup() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold text-zinc-900 dark:text-zinc-100">Setup</h1>
-          <p className="text-sm text-zinc-400 mt-0.5">Manage your print farm printers</p>
+          <p className="text-sm text-zinc-400 mt-0.5">Manage your print farm printers and account</p>
         </div>
         <div className="flex items-center gap-2">
           <button
@@ -252,6 +580,10 @@ export function Setup() {
         </div>
       </div>
 
+      {/* Users */}
+      <UsersSection currentUsername={currentUser?.username} />
+
+      {/* Printers list */}
       <div className="flex flex-col gap-3">
         {printers.length === 0 && (
           <div className="card p-8 text-center text-zinc-400">
@@ -288,7 +620,6 @@ export function Setup() {
 
       <Dialog open={!!editPrinter} onClose={() => setEditPrinter(null)} title="Edit printer">
         {editPrinter && (() => {
-          // Strip id so the form never accidentally submits it in the PATCH body.
           const { id: _id, ...editFields } = editPrinter
           return (
             <PrinterForm

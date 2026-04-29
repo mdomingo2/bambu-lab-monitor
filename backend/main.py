@@ -33,11 +33,11 @@ import database as db
 import ftps
 import thumbnail
 from models import (
-    AlertDismiss, BambuCloudDevicesRequest,
+    AdminPasswordReset, AlertDismiss, BambuCloudDevicesRequest,
     BambuCloudLoginRequest, BambuCloudVerifyRequest,
     LightControl, PasswordChange, Printer,
     PrintControl, PrinterCreate, PrinterUpdate,
-    PrinterStatus, SettingsUpdate, UserLogin,
+    PrinterStatus, SettingsUpdate, UserCreate, UserLogin,
 )
 from mqtt_manager import MQTTManager
 
@@ -324,6 +324,58 @@ def change_password(data: PasswordChange, current_user=Depends(auth.require_auth
     if len(data.new_password) < 8:
         raise HTTPException(status_code=400, detail="New password must be at least 8 characters")
     db.update_user_password(current_user.username, auth.hash_password(data.new_password))
+    return {"ok": True}
+
+
+# ── User management (admin) ───────────────────────────────────────────────────
+
+def _require_admin(current_user=Depends(auth.require_auth)):  # noqa: B008
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin role required")
+    return current_user
+
+
+@router.get("/api/users")
+def list_users(current_user=Depends(_require_admin)):  # noqa: B008
+    return [{"username": u.username, "role": u.role} for u in db.list_users()]
+
+
+@router.post("/api/users", status_code=201)
+def create_user(data: UserCreate, current_user=Depends(_require_admin)):  # noqa: B008
+    if db.get_user(data.username):
+        raise HTTPException(status_code=400, detail="Username already taken")
+    if len(data.username.strip()) < 1:
+        raise HTTPException(status_code=400, detail="Username cannot be empty")
+    if len(data.password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+    if data.role not in ("admin", "viewer"):
+        raise HTTPException(status_code=400, detail="Role must be 'admin' or 'viewer'")
+    user = db.create_user(data.username.strip(), auth.hash_password(data.password), data.role)
+    return {"username": user.username, "role": user.role}
+
+
+@router.delete("/api/users/{username}", status_code=204)
+def delete_user(username: str, current_user=Depends(_require_admin)):  # noqa: B008
+    if username == current_user.username:
+        raise HTTPException(status_code=400, detail="You cannot delete your own account")
+    target = db.get_user(username)
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    # Protect the last admin
+    if target.role == "admin":
+        admin_count = sum(1 for u in db.list_users() if u.role == "admin")
+        if admin_count <= 1:
+            raise HTTPException(status_code=400, detail="Cannot delete the last admin account")
+    db.delete_user(username)
+
+
+@router.patch("/api/users/{username}/password")
+def admin_reset_password(username: str, data: AdminPasswordReset, current_user=Depends(_require_admin)):  # noqa: B008
+    if not db.get_user(username):
+        raise HTTPException(status_code=404, detail="User not found")
+    if len(data.new_password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+    db.update_user_password(username, auth.hash_password(data.new_password))
     return {"ok": True}
 
 

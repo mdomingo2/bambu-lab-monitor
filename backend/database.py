@@ -270,3 +270,22 @@ def update_user_password(username: str, hashed_password: str) -> bool:
         session.add(user)
         session.commit()
     return True
+
+
+def list_users() -> list[User]:
+    """Return all user accounts ordered by username."""
+    with Session(engine) as session:
+        return session.exec(select(User).order_by(User.username)).all()
+
+
+def delete_user(username: str) -> bool:
+    """Delete a user by username. Returns False if not found."""
+    with Session(engine) as session:
+        user = session.exec(
+            select(User).where(User.username == username)
+        ).first()
+        if not user:
+            return False
+        session.delete(user)
+        session.commit()
+    return True

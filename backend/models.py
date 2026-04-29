@@ -133,6 +133,16 @@ class PasswordChange(BaseModel):
     new_password: str
 
 
+class UserCreate(BaseModel):
+    username: str
+    password: str
+    role: str = "admin"
+
+
+class AdminPasswordReset(BaseModel):
+    new_password: str
+
+
 class BambuCloudLoginRequest(BaseModel):
     email: str
     password: str
