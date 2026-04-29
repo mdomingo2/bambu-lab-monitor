@@ -7,6 +7,7 @@
  */
 import { useEffect, useRef } from 'react'
 import { usePrinterStore } from '../store/printerStore'
+import { useAuthStore } from '../store/authStore'
 
 // Derive the WebSocket URL from the current page protocol so the app works
 // on both http (ws://) and https (wss://) origins.
@@ -25,9 +26,16 @@ function showNotification(title, body, icon = '/favicon.ico') {
   }
 }
 
+// WebSocket close codes that mean "you are not authenticated"
+const AUTH_CLOSE_CODES = new Set([
+  4001,  // our custom unauthorized code
+  1008,  // Policy Violation (standard)
+])
+
 export function useWebSocket() {
   const ws             = useRef(null)
   const reconnectTimer = useRef(null)
+  const logout         = useAuthStore.getState().logout
 
   const {
     setConnected, setPrinters, addPrinter, updatePrinter, removePrinter,
@@ -44,8 +52,13 @@ export function useWebSocket() {
       reconnectTimer.current = null
     }
 
-    ws.current.onclose = () => {
+    ws.current.onclose = (event) => {
       setConnected(false)
+      // Auth error — clear local session and let ProtectedRoute redirect to login.
+      if (AUTH_CLOSE_CODES.has(event.code)) {
+        logout()
+        return
+      }
       reconnectTimer.current = setTimeout(connect, 3000)
     }
 
