@@ -32,6 +32,22 @@ _DEVICES_URL = "https://api.bambulab.com/v1/iot-service/api/user/device"
 _TIMEOUT = 15
 
 # ---------------------------------------------------------------------------
+# Headers required by Bambu's API (mimics the official network agent)
+# ---------------------------------------------------------------------------
+
+_AUTH_HEADERS = {
+    "User-Agent": "bambu_network_agent/01.09.05.04",
+    "Accept": "application/json",
+    "Content-Type": "application/json",
+    "Referer": "https://bambulab.com/",
+}
+
+_API_HEADERS = {
+    "User-Agent": "bambu_network_agent/01.09.05.04",
+    "Accept": "application/json",
+}
+
+# ---------------------------------------------------------------------------
 # Known model codes → our internal model labels
 # ---------------------------------------------------------------------------
 # Source: community reverse-engineering of Bambu's device API.
@@ -108,7 +124,8 @@ def login(email: str, password: str) -> BambuLoginResult:
     try:
         r = httpx.post(
             _AUTH_URL,
-            json={"account": email, "password": password},
+            json={"account": email, "password": password, "apiError": ""},
+            headers=_AUTH_HEADERS,
             timeout=_TIMEOUT,
         )
         r.raise_for_status()
@@ -143,6 +160,7 @@ def verify_2fa(tfa_key: str, code: str) -> BambuLoginResult:
         r = httpx.post(
             _TFA_URL,
             json={"tfaKey": tfa_key, "tfaCode": code},
+            headers=_AUTH_HEADERS,
             timeout=_TIMEOUT,
         )
         r.raise_for_status()
@@ -169,7 +187,7 @@ def get_devices(token: str) -> list[BambuDevice]:
     """Fetch all devices registered to the authenticated account."""
     r = httpx.get(
         _DEVICES_URL,
-        headers={"Authorization": f"Bearer {token}"},
+        headers={**_API_HEADERS, "Authorization": f"Bearer {token}"},
         timeout=_TIMEOUT,
     )
     r.raise_for_status()
