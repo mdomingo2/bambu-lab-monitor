@@ -20,12 +20,17 @@ import bambu_cloud as bc
 # ---------------------------------------------------------------------------
 
 def _make_response(status_code: int, json_body: dict) -> MagicMock:
-    """Build a mock httpx.Response with the given status code and JSON body."""
-    r = MagicMock(spec=httpx.Response)
+    """Build a mock httpx.Response with the given status code and JSON body.
+
+    We intentionally avoid spec=httpx.Response because httpx.Response.headers
+    is a property, and MagicMock with spec blocks property access on instances,
+    causing AttributeError in the logging code that reads r.headers.
+    """
+    r = MagicMock()
     r.status_code = status_code
     r.text = str(json_body)
     r.json.return_value = json_body
-    # raise_for_status raises on 4xx/5xx
+    r.headers = MagicMock()   # auto-generates .get_list(), .get(), etc.
     if status_code >= 400:
         r.raise_for_status.side_effect = httpx.HTTPStatusError(
             "error", request=MagicMock(), response=r
