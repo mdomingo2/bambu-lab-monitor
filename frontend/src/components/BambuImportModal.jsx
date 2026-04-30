@@ -84,7 +84,7 @@ function StepLogin({ onResult }) {
 
 // ── Step 2: 2FA code ──────────────────────────────────────────────────────────
 
-function Step2FA({ tfaKey, email, password, sessionCookies, onResult, onNewTfaKey }) {
+function Step2FA({ tfaKey, email, password, onResult, onNewTfaKey }) {
   const [code, setCode]           = useState('')
   const [error, setError]         = useState('')
   const [loading, setLoading]     = useState(false)
@@ -99,7 +99,6 @@ function Step2FA({ tfaKey, email, password, sessionCookies, onResult, onNewTfaKe
       const data = await api('/api/bambu-cloud/verify', {
         tfa_key: tfaKey,
         code,
-        session_cookies: sessionCookies || {},
         email,
       })
       onResult(data)
@@ -115,12 +114,11 @@ function Step2FA({ tfaKey, email, password, sessionCookies, onResult, onNewTfaKe
     try {
       const data = await api('/api/bambu-cloud/login', { email, password })
       if (data.needs_2fa) {
-        onNewTfaKey(data.tfa_key || '', data.session_cookies || {})
+        onNewTfaKey(data.tfa_key || '')
         setCode('')
         setResent(true)
         setTimeout(() => setResent(false), 5000)
       } else if (data.token) {
-        // login succeeded without 2FA this time (shouldn't happen but handle it)
         onResult(data)
       } else {
         setError('Bambu did not send a new code — try again in a minute.')
@@ -372,14 +370,13 @@ const STEP_TITLES = {
 }
 
 export function BambuImportModal({ open, onClose, onPrintersAdded }) {
-  const [step, setStep]         = useState('login')
-  const [tfaKey, setTfaKey]     = useState('')
-  const [token, setToken]       = useState('')
+  const [step, setStep]             = useState('login')
+  const [tfaKey, setTfaKey]         = useState('')
+  const [token, setToken]           = useState('')
   const [addedCount, setAddedCount] = useState(0)
-  // Kept only long enough to support "Resend code"; cleared on close.
-  const [savedEmail, setSavedEmail]           = useState('')
-  const [savedPassword, setSavedPassword]     = useState('')
-  const [sessionCookies, setSessionCookies]   = useState({})
+  // Saved only to support "Resend code"; cleared on close.
+  const [savedEmail, setSavedEmail]       = useState('')
+  const [savedPassword, setSavedPassword] = useState('')
 
   const handleClose = () => {
     setStep('login')
@@ -388,14 +385,12 @@ export function BambuImportModal({ open, onClose, onPrintersAdded }) {
     setAddedCount(0)
     setSavedEmail('')
     setSavedPassword('')
-    setSessionCookies({})
     onClose()
   }
 
   const onLoginResult = (data, email, password) => {
     if (data.needs_2fa) {
       setTfaKey(data.tfa_key || '')
-      setSessionCookies(data.session_cookies || {})
       setSavedEmail(email)
       setSavedPassword(password)
       setStep('tfa')
@@ -408,7 +403,6 @@ export function BambuImportModal({ open, onClose, onPrintersAdded }) {
   const onVerifyResult = (data) => {
     setSavedEmail('')
     setSavedPassword('')
-    setSessionCookies({})
     setToken(data.token)
     setStep('devices')
   }
@@ -456,7 +450,7 @@ export function BambuImportModal({ open, onClose, onPrintersAdded }) {
         )}
 
         {step === 'login'   && <StepLogin onResult={onLoginResult} />}
-        {step === 'tfa'     && <Step2FA tfaKey={tfaKey} email={savedEmail} password={savedPassword} sessionCookies={sessionCookies} onResult={onVerifyResult} onNewTfaKey={(key, cookies) => { setTfaKey(key); setSessionCookies(cookies) }} />}
+        {step === 'tfa'     && <Step2FA tfaKey={tfaKey} email={savedEmail} password={savedPassword} onResult={onVerifyResult} onNewTfaKey={(key) => setTfaKey(key)} />}
         {step === 'devices' && <StepDevices token={token} onImport={onImport} />}
         {step === 'done'    && <StepDone count={addedCount} onClose={handleClose} />}
       </div>

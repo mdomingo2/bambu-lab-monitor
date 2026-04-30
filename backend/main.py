@@ -608,16 +608,13 @@ def bambu_cloud_login(data: BambuCloudLoginRequest):
         "needs_2fa": result.needs_2fa,
         "tfa_key": result.tfa_key,
         "token": result.token,
-        # session_cookies kept for API compat but no longer needed —
-        # the live httpx.Client is stored server-side in bambu_cloud._tfa_sessions.
-        "session_cookies": {},
     }
 
 
 @router.post("/api/bambu-cloud/verify")
 def bambu_cloud_verify(data: BambuCloudVerifyRequest):
     """Submit 2FA verification code and get an access token."""
-    result = bambu_cloud.verify_2fa(data.tfa_key, data.code, data.session_cookies, data.email)
+    result = bambu_cloud.verify_2fa(data.tfa_key, data.code, email=data.email)
     if result.error:
         raise HTTPException(status_code=422, detail=result.error)
     return {"token": result.token}

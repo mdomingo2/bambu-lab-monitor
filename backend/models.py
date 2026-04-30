@@ -151,7 +151,6 @@ class BambuCloudLoginRequest(BaseModel):
 class BambuCloudVerifyRequest(BaseModel):
     tfa_key: str
     code: str
-    session_cookies: dict = {}
     email: str = ""
 
 

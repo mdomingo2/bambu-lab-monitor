@@ -244,7 +244,6 @@ def get_user(username: str) -> User | None:
 
 def create_user(username: str, hashed_password: str, role: str = "admin") -> User:
     """Create a new user account."""
-    from datetime import datetime, timezone
     user = User(
         username=username,
         hashed_password=hashed_password,

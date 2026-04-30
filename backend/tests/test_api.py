@@ -217,3 +217,92 @@ class TestDismissedAlerts:
             client.post(f"/api/printers/{pid}/dismissed-alerts", json={"hms_code": code})
         dismissed = client.get(f"/api/printers/{pid}/dismissed-alerts").json()["dismissed"]
         assert set(dismissed) == set(codes)
+
+
+# ── User management ───────────────────────────────────────────────────────────
+
+class TestUserManagement:
+    """
+    These tests use the session-scoped `client` fixture which bypasses auth
+    and injects a fake admin user, so all admin-only endpoints are reachable.
+    """
+
+    NEW_USER = {"username": "newuser", "password": "password123", "role": "viewer"}
+
+    def test_list_users_returns_list(self, client):
+        r = client.get("/api/users")
+        assert r.status_code == 200
+        assert isinstance(r.json(), list)
+
+    def test_create_user_returns_201(self, client):
+        r = client.post("/api/users", json=self.NEW_USER)
+        assert r.status_code == 201
+
+    def test_create_user_fields_correct(self, client):
+        r = client.post("/api/users", json=self.NEW_USER)
+        body = r.json()
+        assert body["username"] == "newuser"
+        assert body["role"] == "viewer"
+
+    def test_create_user_appears_in_list(self, client):
+        client.post("/api/users", json=self.NEW_USER)
+        users = client.get("/api/users").json()
+        assert any(u["username"] == "newuser" for u in users)
+
+    def test_create_duplicate_username_returns_400(self, client):
+        client.post("/api/users", json=self.NEW_USER)
+        r = client.post("/api/users", json=self.NEW_USER)
+        assert r.status_code == 400
+
+    def test_create_user_short_password_returns_400(self, client):
+        r = client.post("/api/users", json={**self.NEW_USER, "password": "short"})
+        assert r.status_code == 400
+
+    def test_create_user_invalid_role_returns_400(self, client):
+        r = client.post("/api/users", json={**self.NEW_USER, "role": "superuser"})
+        assert r.status_code == 400
+
+    def test_create_user_empty_username_returns_400(self, client):
+        r = client.post("/api/users", json={**self.NEW_USER, "username": "   "})
+        assert r.status_code == 400
+
+    def test_delete_user(self, client):
+        client.post("/api/users", json=self.NEW_USER)
+        r = client.delete(f"/api/users/{self.NEW_USER['username']}")
+        assert r.status_code == 204
+
+    def test_delete_user_removes_from_list(self, client):
+        client.post("/api/users", json=self.NEW_USER)
+        client.delete(f"/api/users/{self.NEW_USER['username']}")
+        users = client.get("/api/users").json()
+        assert not any(u["username"] == "newuser" for u in users)
+
+    def test_delete_unknown_user_returns_404(self, client):
+        r = client.delete("/api/users/doesnotexist")
+        assert r.status_code == 404
+
+    def test_delete_self_returns_400(self, client):
+        # The fake auth user is "testadmin" (see conftest.py)
+        r = client.delete("/api/users/testadmin")
+        assert r.status_code == 400
+
+    def test_admin_reset_password_success(self, client):
+        client.post("/api/users", json=self.NEW_USER)
+        r = client.patch(
+            f"/api/users/{self.NEW_USER['username']}/password",
+            json={"new_password": "brandnewpass"},
+        )
+        assert r.status_code == 200
+        assert r.json()["ok"] is True
+
+    def test_admin_reset_password_too_short_returns_400(self, client):
+        client.post("/api/users", json=self.NEW_USER)
+        r = client.patch(
+            f"/api/users/{self.NEW_USER['username']}/password",
+            json={"new_password": "tiny"},
+        )
+        assert r.status_code == 400
+
+    def test_admin_reset_password_unknown_user_returns_404(self, client):
+        r = client.patch("/api/users/nobody/password", json={"new_password": "validpassword"})
+        assert r.status_code == 404
