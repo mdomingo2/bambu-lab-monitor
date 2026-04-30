@@ -608,9 +608,9 @@ def bambu_cloud_login(data: BambuCloudLoginRequest):
         "needs_2fa": result.needs_2fa,
         "tfa_key": result.tfa_key,
         "token": result.token,
-        # Session cookies must be forwarded to /verify — Bambu's tfaKey is
-        # always "" and the real session lives in these cookies.
-        "session_cookies": result.session_cookies,
+        # session_cookies kept for API compat but no longer needed —
+        # the live httpx.Client is stored server-side in bambu_cloud._tfa_sessions.
+        "session_cookies": {},
     }
 
 

@@ -11,10 +11,17 @@ Typical flow
 1. client calls login(email, password)
    → {needs_2fa: True, tfa_key: "..."} if 2FA enabled, or
    → {needs_2fa: False, token: "eyJ..."} if no 2FA
-2. If needs_2fa, client calls verify(tfa_key, code)
+2. If needs_2fa, client calls verify(tfa_key, code, email)
    → {token: "eyJ..."}
 3. client calls get_devices(token)
    → list[BambuDevice]
+
+Session persistence
+-------------------
+When 2FA is required the httpx.Client from the login call is kept alive in
+_tfa_sessions[email] so that verify_2fa() can reuse the SAME client (and
+therefore the same cookie jar / TCP connection).  This avoids the issue of
+trying to serialize and re-inject Cloudflare cookies into a brand-new client.
 """
 
 import logging
@@ -35,20 +42,39 @@ _DEVICES_URL = "https://api.bambulab.com/v1/iot-service/api/user/device"
 _TIMEOUT = 15
 
 # ---------------------------------------------------------------------------
-# Headers required by Bambu's API (mimics the official network agent)
+# Headers required by Bambu's API
+# Mirrors what OrcaSlicer / bambu_network_agent sends so Bambu doesn't block
+# the request as an unknown client.
 # ---------------------------------------------------------------------------
 
 _AUTH_HEADERS = {
-    "User-Agent": "bambu_network_agent/01.09.05.04",
-    "Accept": "application/json",
-    "Content-Type": "application/json",
-    "Referer": "https://bambulab.com/",
+    "User-Agent":           "bambu_network_agent/01.09.05.04",
+    "X-BBL-Client-Name":    "OrcaSlicer",
+    "X-BBL-Client-Version": "01.09.05.04",
+    "X-BBL-Client-OS-Type": "linux",
+    "X-BBL-Language":       "en",
+    "X-BBL-App-Version":    "01.09.05.04",
+    "X-BBL-Timezone":       "UTC",
+    "Accept":               "application/json",
+    "Accept-Language":      "en",
+    "Content-Type":         "application/json",
+    "Referer":              "https://bambulab.com/",
 }
 
 _API_HEADERS = {
-    "User-Agent": "bambu_network_agent/01.09.05.04",
-    "Accept": "application/json",
+    "User-Agent":           "bambu_network_agent/01.09.05.04",
+    "X-BBL-Client-Name":    "OrcaSlicer",
+    "X-BBL-Client-Version": "01.09.05.04",
+    "Accept":               "application/json",
 }
+
+# ---------------------------------------------------------------------------
+# In-memory 2FA session store
+# Maps email → live httpx.Client that still holds the login cookie jar.
+# Cleaned up after verify_2fa() completes (success or failure).
+# ---------------------------------------------------------------------------
+
+_tfa_sessions: dict[str, httpx.Client] = {}
 
 # ---------------------------------------------------------------------------
 # Known model codes → our internal model labels
@@ -116,9 +142,7 @@ class BambuLoginResult(BaseModel):
     tfa_key: str | None = None       # present when needs_2fa=True
     token: str | None = None         # present when needs_2fa=False
     error: str | None = None         # human-readable error message
-    # Serialised cookies from the login response, needed for the verify call.
-    # Bambu's tfaKey is always "" — the real session lives in the cookies.
-    session_cookies: dict = {}
+    session_cookies: dict = {}       # kept for API compat; not used internally anymore
 
 
 # ---------------------------------------------------------------------------
@@ -128,42 +152,58 @@ class BambuLoginResult(BaseModel):
 def login(email: str, password: str) -> BambuLoginResult:
     """Authenticate with Bambu cloud using email + password.
 
-    Returns session_cookies that MUST be forwarded to verify_2fa() when 2FA
-    is required — Bambu's tfaKey is always an empty string; the session is
-    carried entirely by cookies set during this call.
+    If 2FA is required the live httpx.Client is stored in _tfa_sessions[email]
+    so that verify_2fa() can reuse it with the same cookie jar.
     """
+    # Close any leftover session for this email before starting fresh.
+    _close_tfa_session(email)
+
+    client = httpx.Client(
+        headers=_AUTH_HEADERS,
+        timeout=_TIMEOUT,
+        follow_redirects=True,
+    )
     try:
-        with httpx.Client(headers=_AUTH_HEADERS, timeout=_TIMEOUT, follow_redirects=True) as client:
-            r = client.post(
-                _AUTH_URL,
-                json={"account": email, "password": password, "apiError": ""},
-            )
-            logger.info("Bambu login HTTP %s", r.status_code)
-            logger.info("Bambu login response body: %s", r.text[:500])
-            cookies = dict(client.cookies)
-            logger.info("Bambu login cookies: %s", list(cookies.keys()))
-            r.raise_for_status()
-            body = r.json()
+        r = client.post(
+            _AUTH_URL,
+            json={"account": email, "password": password, "apiError": ""},
+        )
+        logger.info("Bambu login HTTP %s", r.status_code)
+        logger.info("Bambu login response body: %s", r.text[:500])
+        logger.info("Bambu login cookies: %s", list(dict(client.cookies).keys()))
+        logger.info(
+            "Bambu login Set-Cookie headers: %s",
+            r.headers.get_list("set-cookie") if hasattr(r.headers, "get_list") else r.headers.get("set-cookie"),
+        )
+        r.raise_for_status()
+        body = r.json()
     except httpx.HTTPStatusError as exc:
+        client.close()
         logger.warning("Bambu login error %s: %s", exc.response.status_code, exc.response.text[:300])
         return BambuLoginResult(
             needs_2fa=False,
             error=f"Bambu cloud returned {exc.response.status_code}",
         )
     except Exception as exc:
+        client.close()
         return BambuLoginResult(needs_2fa=False, error=str(exc))
 
-    # 2FA required — tfaKey is always "" but cookies carry the session
+    # 2FA required — keep the client alive so verify_2fa() reuses the session
     if body.get("loginType") == "verifyCode":
         tfa_key = body.get("tfaKey") or ""
-        logger.info("Bambu 2FA required. tfaKey=%r, cookies=%s", tfa_key, list(cookies.keys()))
-        return BambuLoginResult(needs_2fa=True, tfa_key=tfa_key, session_cookies=cookies)
+        logger.info(
+            "Bambu 2FA required. tfaKey=%r, cookies=%s",
+            tfa_key, list(dict(client.cookies).keys()),
+        )
+        _tfa_sessions[email] = client   # hand off ownership; NOT closed here
+        return BambuLoginResult(needs_2fa=True, tfa_key=tfa_key)
 
+    # No 2FA — close the client, we have the token
     token = body.get("accessToken") or body.get("access_token")
+    client.close()
     if token:
-        return BambuLoginResult(needs_2fa=False, token=token, session_cookies=cookies)
+        return BambuLoginResult(needs_2fa=False, token=token)
 
-    # Unknown response format
     logger.warning("Bambu login unexpected body keys: %s", list(body.keys()))
     return BambuLoginResult(
         needs_2fa=False,
@@ -174,29 +214,39 @@ def login(email: str, password: str) -> BambuLoginResult:
 def verify_2fa(
     tfa_key: str,
     code: str,
-    session_cookies: dict | None = None,
+    session_cookies: dict | None = None,   # kept for API compat; ignored
     email: str = "",
 ) -> BambuLoginResult:
     """Submit the 2FA verification code and get an access token.
 
-    Bambu's tfaKey is always ""; the server looks up the pending session by
-    email address + IP. Include `account` so Bambu can match the request to
-    the right pending 2FA challenge.
+    Reuses the live httpx.Client stored by login() so the cookie jar is intact.
+    Falls back to a fresh client if no stored session exists (e.g. after a
+    server restart).
     """
-    cookies = session_cookies or {}
-    logger.info(
-        "Bambu verify_2fa: email=%r, code=%r, cookie_keys=%s",
-        email, code, list(cookies.keys()),
-    )
+    client = _tfa_sessions.pop(email, None) if email else None
+    owns_client = client is None
+    if client is None:
+        logger.warning("Bambu verify_2fa: no stored session for %r, creating fresh client", email)
+        client = httpx.Client(
+            headers=_AUTH_HEADERS,
+            timeout=_TIMEOUT,
+            cookies=session_cookies or {},
+        )
+
     body: dict = {"tfaKey": tfa_key, "tfaCode": code, "apiError": ""}
     if email:
         body["account"] = email
+
+    logger.info(
+        "Bambu verify_2fa: email=%r, code=%r, cookie_keys=%s, reused_session=%s",
+        email, code, list(dict(client.cookies).keys()), not owns_client,
+    )
+
     try:
-        with httpx.Client(headers=_AUTH_HEADERS, timeout=_TIMEOUT, cookies=cookies) as client:
-            r = client.post(_TFA_URL, json=body)
+        r = client.post(_TFA_URL, json=body)
         logger.info("Bambu verify HTTP %s body: %s", r.status_code, r.text[:500])
         r.raise_for_status()
-        body = r.json()
+        resp_body = r.json()
     except httpx.HTTPStatusError as exc:
         try:
             err_body = exc.response.json()
@@ -211,21 +261,32 @@ def verify_2fa(
         return BambuLoginResult(
             needs_2fa=True,
             tfa_key=tfa_key,
-            session_cookies=cookies,
             error=f"Verification failed: {detail}",
         )
     except Exception as exc:
-        return BambuLoginResult(needs_2fa=True, tfa_key=tfa_key, session_cookies=cookies, error=str(exc))
+        return BambuLoginResult(needs_2fa=True, tfa_key=tfa_key, error=str(exc))
+    finally:
+        client.close()
 
-    token = body.get("accessToken") or body.get("access_token")
+    token = resp_body.get("accessToken") or resp_body.get("access_token")
     if token:
         return BambuLoginResult(needs_2fa=False, token=token)
 
     return BambuLoginResult(
         needs_2fa=True,
         tfa_key=tfa_key,
-        error=body.get("error") or body.get("message") or "2FA verification failed",
+        error=resp_body.get("error") or resp_body.get("message") or "2FA verification failed",
     )
+
+
+def _close_tfa_session(email: str) -> None:
+    """Close and discard any stored 2FA session for this email."""
+    client = _tfa_sessions.pop(email, None)
+    if client is not None:
+        try:
+            client.close()
+        except Exception:
+            pass
 
 
 def get_devices(token: str) -> list[BambuDevice]:
