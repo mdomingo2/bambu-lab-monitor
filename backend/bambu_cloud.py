@@ -17,8 +17,11 @@ Typical flow
    → list[BambuDevice]
 """
 
+import logging
 import httpx
 from pydantic import BaseModel
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Cloud API base URLs
@@ -128,9 +131,12 @@ def login(email: str, password: str) -> BambuLoginResult:
             headers=_AUTH_HEADERS,
             timeout=_TIMEOUT,
         )
+        logger.info("Bambu login HTTP %s", r.status_code)
+        logger.info("Bambu login response body: %s", r.text[:500])
         r.raise_for_status()
         body = r.json()
     except httpx.HTTPStatusError as exc:
+        logger.warning("Bambu login error %s: %s", exc.response.status_code, exc.response.text[:300])
         return BambuLoginResult(
             needs_2fa=False,
             error=f"Bambu cloud returned {exc.response.status_code}",
@@ -140,7 +146,8 @@ def login(email: str, password: str) -> BambuLoginResult:
 
     # 2FA required
     if body.get("loginType") == "verifyCode":
-        tfa_key = body.get("tfaKey") or body.get("tfa_key", "")
+        tfa_key = body.get("tfaKey") or body.get("tfa_key") or body.get("tfakey") or ""
+        logger.info("Bambu 2FA required. tfaKey field value: %r (all keys: %s)", tfa_key, list(body.keys()))
         return BambuLoginResult(needs_2fa=True, tfa_key=tfa_key)
 
     token = body.get("accessToken") or body.get("access_token")
@@ -148,6 +155,7 @@ def login(email: str, password: str) -> BambuLoginResult:
         return BambuLoginResult(needs_2fa=False, token=token)
 
     # Unknown response format
+    logger.warning("Bambu login unexpected body keys: %s", list(body.keys()))
     return BambuLoginResult(
         needs_2fa=False,
         error=body.get("error") or body.get("message") or "Unexpected response from Bambu cloud",
@@ -156,6 +164,7 @@ def login(email: str, password: str) -> BambuLoginResult:
 
 def verify_2fa(tfa_key: str, code: str) -> BambuLoginResult:
     """Submit the 2FA verification code and get an access token."""
+    logger.info("Bambu verify_2fa: tfaKey=%r (len=%d) code=%r", tfa_key[:8] + "..." if len(tfa_key) > 8 else tfa_key, len(tfa_key), code)
     try:
         r = httpx.post(
             _TFA_URL,
@@ -163,6 +172,7 @@ def verify_2fa(tfa_key: str, code: str) -> BambuLoginResult:
             headers=_AUTH_HEADERS,
             timeout=_TIMEOUT,
         )
+        logger.info("Bambu verify HTTP %s body: %s", r.status_code, r.text[:500])
         r.raise_for_status()
         body = r.json()
     except httpx.HTTPStatusError as exc:
