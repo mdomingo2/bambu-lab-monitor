@@ -116,6 +116,9 @@ class BambuLoginResult(BaseModel):
     tfa_key: str | None = None       # present when needs_2fa=True
     token: str | None = None         # present when needs_2fa=False
     error: str | None = None         # human-readable error message
+    # Serialised cookies from the login response, needed for the verify call.
+    # Bambu's tfaKey is always "" — the real session lives in the cookies.
+    session_cookies: dict = {}
 
 
 # ---------------------------------------------------------------------------
@@ -123,18 +126,24 @@ class BambuLoginResult(BaseModel):
 # ---------------------------------------------------------------------------
 
 def login(email: str, password: str) -> BambuLoginResult:
-    """Authenticate with Bambu cloud using email + password."""
+    """Authenticate with Bambu cloud using email + password.
+
+    Returns session_cookies that MUST be forwarded to verify_2fa() when 2FA
+    is required — Bambu's tfaKey is always an empty string; the session is
+    carried entirely by cookies set during this call.
+    """
     try:
-        r = httpx.post(
-            _AUTH_URL,
-            json={"account": email, "password": password, "apiError": ""},
-            headers=_AUTH_HEADERS,
-            timeout=_TIMEOUT,
-        )
-        logger.info("Bambu login HTTP %s", r.status_code)
-        logger.info("Bambu login response body: %s", r.text[:500])
-        r.raise_for_status()
-        body = r.json()
+        with httpx.Client(headers=_AUTH_HEADERS, timeout=_TIMEOUT, follow_redirects=True) as client:
+            r = client.post(
+                _AUTH_URL,
+                json={"account": email, "password": password, "apiError": ""},
+            )
+            logger.info("Bambu login HTTP %s", r.status_code)
+            logger.info("Bambu login response body: %s", r.text[:500])
+            cookies = dict(client.cookies)
+            logger.info("Bambu login cookies: %s", list(cookies.keys()))
+            r.raise_for_status()
+            body = r.json()
     except httpx.HTTPStatusError as exc:
         logger.warning("Bambu login error %s: %s", exc.response.status_code, exc.response.text[:300])
         return BambuLoginResult(
@@ -144,15 +153,15 @@ def login(email: str, password: str) -> BambuLoginResult:
     except Exception as exc:
         return BambuLoginResult(needs_2fa=False, error=str(exc))
 
-    # 2FA required
+    # 2FA required — tfaKey is always "" but cookies carry the session
     if body.get("loginType") == "verifyCode":
-        tfa_key = body.get("tfaKey") or body.get("tfa_key") or body.get("tfakey") or ""
-        logger.info("Bambu 2FA required. tfaKey field value: %r (all keys: %s)", tfa_key, list(body.keys()))
-        return BambuLoginResult(needs_2fa=True, tfa_key=tfa_key)
+        tfa_key = body.get("tfaKey") or ""
+        logger.info("Bambu 2FA required. tfaKey=%r, cookies=%s", tfa_key, list(cookies.keys()))
+        return BambuLoginResult(needs_2fa=True, tfa_key=tfa_key, session_cookies=cookies)
 
     token = body.get("accessToken") or body.get("access_token")
     if token:
-        return BambuLoginResult(needs_2fa=False, token=token)
+        return BambuLoginResult(needs_2fa=False, token=token, session_cookies=cookies)
 
     # Unknown response format
     logger.warning("Bambu login unexpected body keys: %s", list(body.keys()))
@@ -162,21 +171,24 @@ def login(email: str, password: str) -> BambuLoginResult:
     )
 
 
-def verify_2fa(tfa_key: str, code: str) -> BambuLoginResult:
-    """Submit the 2FA verification code and get an access token."""
-    logger.info("Bambu verify_2fa: tfaKey=%r (len=%d) code=%r", tfa_key[:8] + "..." if len(tfa_key) > 8 else tfa_key, len(tfa_key), code)
+def verify_2fa(tfa_key: str, code: str, session_cookies: dict | None = None) -> BambuLoginResult:
+    """Submit the 2FA verification code and get an access token.
+
+    session_cookies must be the cookies returned by login() — Bambu uses
+    them to look up the pending 2FA session.
+    """
+    cookies = session_cookies or {}
+    logger.info("Bambu verify_2fa: code=%r, cookie_keys=%s", code, list(cookies.keys()))
     try:
-        r = httpx.post(
-            _TFA_URL,
-            json={"tfaKey": tfa_key, "tfaCode": code, "apiError": ""},
-            headers=_AUTH_HEADERS,
-            timeout=_TIMEOUT,
-        )
+        with httpx.Client(headers=_AUTH_HEADERS, timeout=_TIMEOUT, cookies=cookies) as client:
+            r = client.post(
+                _TFA_URL,
+                json={"tfaKey": tfa_key, "tfaCode": code, "apiError": ""},
+            )
         logger.info("Bambu verify HTTP %s body: %s", r.status_code, r.text[:500])
         r.raise_for_status()
         body = r.json()
     except httpx.HTTPStatusError as exc:
-        # Try to surface Bambu's actual error message from the response body.
         try:
             err_body = exc.response.json()
             detail = (
@@ -188,12 +200,13 @@ def verify_2fa(tfa_key: str, code: str) -> BambuLoginResult:
         except Exception:
             detail = exc.response.text or str(exc.response.status_code)
         return BambuLoginResult(
-            needs_2fa=True,  # keep needs_2fa=True so frontend stays on 2FA step
+            needs_2fa=True,
             tfa_key=tfa_key,
+            session_cookies=cookies,
             error=f"Verification failed: {detail}",
         )
     except Exception as exc:
-        return BambuLoginResult(needs_2fa=True, tfa_key=tfa_key, error=str(exc))
+        return BambuLoginResult(needs_2fa=True, tfa_key=tfa_key, session_cookies=cookies, error=str(exc))
 
     token = body.get("accessToken") or body.get("access_token")
     if token:

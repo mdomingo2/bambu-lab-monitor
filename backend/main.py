@@ -608,16 +608,17 @@ def bambu_cloud_login(data: BambuCloudLoginRequest):
         "needs_2fa": result.needs_2fa,
         "tfa_key": result.tfa_key,
         "token": result.token,
+        # Session cookies must be forwarded to /verify — Bambu's tfaKey is
+        # always "" and the real session lives in these cookies.
+        "session_cookies": result.session_cookies,
     }
 
 
 @router.post("/api/bambu-cloud/verify")
 def bambu_cloud_verify(data: BambuCloudVerifyRequest):
     """Submit 2FA verification code and get an access token."""
-    result = bambu_cloud.verify_2fa(data.tfa_key, data.code)
+    result = bambu_cloud.verify_2fa(data.tfa_key, data.code, data.session_cookies)
     if result.error:
-        # Return 422 with the error so the frontend can show it inline
-        # without treating it as an unrecoverable failure.
         raise HTTPException(status_code=422, detail=result.error)
     return {"token": result.token}
 
