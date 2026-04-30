@@ -617,7 +617,7 @@ def bambu_cloud_login(data: BambuCloudLoginRequest):
 @router.post("/api/bambu-cloud/verify")
 def bambu_cloud_verify(data: BambuCloudVerifyRequest):
     """Submit 2FA verification code and get an access token."""
-    result = bambu_cloud.verify_2fa(data.tfa_key, data.code, data.session_cookies)
+    result = bambu_cloud.verify_2fa(data.tfa_key, data.code, data.session_cookies, data.email)
     if result.error:
         raise HTTPException(status_code=422, detail=result.error)
     return {"token": result.token}

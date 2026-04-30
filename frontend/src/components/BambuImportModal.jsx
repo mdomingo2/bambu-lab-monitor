@@ -100,6 +100,7 @@ function Step2FA({ tfaKey, email, password, sessionCookies, onResult, onNewTfaKe
         tfa_key: tfaKey,
         code,
         session_cookies: sessionCookies || {},
+        email,
       })
       onResult(data)
     } catch (err) {
@@ -117,7 +118,12 @@ function Step2FA({ tfaKey, email, password, sessionCookies, onResult, onNewTfaKe
         onNewTfaKey(data.tfa_key || '', data.session_cookies || {})
         setCode('')
         setResent(true)
-        setTimeout(() => setResent(false), 4000)
+        setTimeout(() => setResent(false), 5000)
+      } else if (data.token) {
+        // login succeeded without 2FA this time (shouldn't happen but handle it)
+        onResult(data)
+      } else {
+        setError('Bambu did not send a new code — try again in a minute.')
       }
     } catch (err) {
       setError('Could not resend code: ' + err.message)

@@ -171,20 +171,29 @@ def login(email: str, password: str) -> BambuLoginResult:
     )
 
 
-def verify_2fa(tfa_key: str, code: str, session_cookies: dict | None = None) -> BambuLoginResult:
+def verify_2fa(
+    tfa_key: str,
+    code: str,
+    session_cookies: dict | None = None,
+    email: str = "",
+) -> BambuLoginResult:
     """Submit the 2FA verification code and get an access token.
 
-    session_cookies must be the cookies returned by login() — Bambu uses
-    them to look up the pending 2FA session.
+    Bambu's tfaKey is always ""; the server looks up the pending session by
+    email address + IP. Include `account` so Bambu can match the request to
+    the right pending 2FA challenge.
     """
     cookies = session_cookies or {}
-    logger.info("Bambu verify_2fa: code=%r, cookie_keys=%s", code, list(cookies.keys()))
+    logger.info(
+        "Bambu verify_2fa: email=%r, code=%r, cookie_keys=%s",
+        email, code, list(cookies.keys()),
+    )
+    body: dict = {"tfaKey": tfa_key, "tfaCode": code, "apiError": ""}
+    if email:
+        body["account"] = email
     try:
         with httpx.Client(headers=_AUTH_HEADERS, timeout=_TIMEOUT, cookies=cookies) as client:
-            r = client.post(
-                _TFA_URL,
-                json={"tfaKey": tfa_key, "tfaCode": code, "apiError": ""},
-            )
+            r = client.post(_TFA_URL, json=body)
         logger.info("Bambu verify HTTP %s body: %s", r.status_code, r.text[:500])
         r.raise_for_status()
         body = r.json()
