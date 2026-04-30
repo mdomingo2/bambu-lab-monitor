@@ -9,7 +9,7 @@
  *   4. Done
  */
 import { useState } from 'react'
-import { AlertCircle, Check, ChevronRight, CloudDownload, Loader2, X } from 'lucide-react'
+import { AlertCircle, Check, ChevronRight, CloudDownload, Loader2, RefreshCw } from 'lucide-react'
 import { Dialog } from './ui/Dialog'
 
 const MODELS = ['A1', 'A1 Mini', 'P1P', 'P1S', 'P2S', 'X1C', 'X1E', 'H2D']
@@ -40,7 +40,7 @@ function StepLogin({ onResult }) {
     setLoading(true); setError('')
     try {
       const data = await api('/api/bambu-cloud/login', { email: email.trim(), password })
-      onResult(data)
+      onResult(data, email.trim(), password)
     } catch (err) {
       setError(err.message)
     } finally {
@@ -84,10 +84,12 @@ function StepLogin({ onResult }) {
 
 // ── Step 2: 2FA code ──────────────────────────────────────────────────────────
 
-function Step2FA({ tfaKey, onResult }) {
-  const [code, setCode]   = useState('')
-  const [error, setError] = useState('')
+function Step2FA({ tfaKey, email, password, onResult, onNewTfaKey }) {
+  const [code, setCode]       = useState('')
+  const [error, setError]     = useState('')
   const [loading, setLoading] = useState(false)
+  const [resending, setResending] = useState(false)
+  const [resent, setResent]   = useState(false)
 
   const submit = async (e) => {
     e.preventDefault()
@@ -103,21 +105,52 @@ function Step2FA({ tfaKey, onResult }) {
     }
   }
 
+  const resend = async () => {
+    setResending(true); setError(''); setResent(false)
+    try {
+      const data = await api('/api/bambu-cloud/login', { email, password })
+      if (data.tfa_key) {
+        onNewTfaKey(data.tfa_key)
+        setCode('')
+        setResent(true)
+        setTimeout(() => setResent(false), 4000)
+      }
+    } catch (err) {
+      setError('Could not resend code: ' + err.message)
+    } finally {
+      setResending(false)
+    }
+  }
+
   return (
     <form onSubmit={submit} className="flex flex-col gap-4">
       <p className="text-sm text-zinc-500 dark:text-zinc-400">
         A verification code was sent to your email. Enter it below.
       </p>
       {error && <ErrorBox message={error} />}
+      {resent && (
+        <div className="flex items-center gap-2 bg-emerald-50 dark:bg-emerald-900/30 border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-400 rounded-lg px-3 py-2 text-sm">
+          <Check size={14} className="shrink-0" />
+          New code sent — check your email.
+        </div>
+      )}
       <div>
         <label className="label">Verification code</label>
         <input className="input font-mono text-center tracking-widest text-lg"
                type="text" inputMode="numeric" maxLength={8} placeholder="123456"
                value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
-               disabled={loading} autoFocus />
+               disabled={loading || resending} autoFocus />
       </div>
-      <div className="flex justify-end">
-        <button type="submit" disabled={loading || code.length < 4}
+      <div className="flex items-center justify-between">
+        <button type="button" onClick={resend}
+                disabled={resending || loading}
+                className="btn-ghost flex items-center gap-1.5 text-sm text-zinc-500">
+          {resending
+            ? <Loader2 size={13} className="animate-spin" />
+            : <RefreshCw size={13} />}
+          {resending ? 'Sending…' : 'Resend code'}
+        </button>
+        <button type="submit" disabled={loading || resending || code.length < 4}
                 className="btn-primary flex items-center gap-2">
           {loading ? <Loader2 size={15} className="animate-spin" /> : <ChevronRight size={15} />}
           {loading ? 'Verifying…' : 'Verify'}
@@ -329,23 +362,29 @@ const STEP_TITLES = {
 }
 
 export function BambuImportModal({ open, onClose, onPrintersAdded }) {
-  const [step, setStep]   = useState('login')
-  const [tfaKey, setTfaKey] = useState('')
-  const [token, setToken] = useState('')
+  const [step, setStep]         = useState('login')
+  const [tfaKey, setTfaKey]     = useState('')
+  const [token, setToken]       = useState('')
   const [addedCount, setAddedCount] = useState(0)
+  // Kept only long enough to support "Resend code"; cleared on close.
+  const [savedEmail, setSavedEmail]       = useState('')
+  const [savedPassword, setSavedPassword] = useState('')
 
   const handleClose = () => {
-    // Reset state when modal closes
     setStep('login')
     setTfaKey('')
     setToken('')
     setAddedCount(0)
+    setSavedEmail('')
+    setSavedPassword('')
     onClose()
   }
 
-  const onLoginResult = (data) => {
+  const onLoginResult = (data, email, password) => {
     if (data.needs_2fa) {
       setTfaKey(data.tfa_key)
+      setSavedEmail(email)
+      setSavedPassword(password)
       setStep('tfa')
     } else {
       setToken(data.token)
@@ -354,6 +393,8 @@ export function BambuImportModal({ open, onClose, onPrintersAdded }) {
   }
 
   const onVerifyResult = (data) => {
+    setSavedEmail('')
+    setSavedPassword('')
     setToken(data.token)
     setStep('devices')
   }
@@ -401,7 +442,7 @@ export function BambuImportModal({ open, onClose, onPrintersAdded }) {
         )}
 
         {step === 'login'   && <StepLogin onResult={onLoginResult} />}
-        {step === 'tfa'     && <Step2FA tfaKey={tfaKey} onResult={onVerifyResult} />}
+        {step === 'tfa'     && <Step2FA tfaKey={tfaKey} email={savedEmail} password={savedPassword} onResult={onVerifyResult} onNewTfaKey={setTfaKey} />}
         {step === 'devices' && <StepDevices token={token} onImport={onImport} />}
         {step === 'done'    && <StepDone count={addedCount} onClose={handleClose} />}
       </div>

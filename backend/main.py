@@ -616,7 +616,9 @@ def bambu_cloud_verify(data: BambuCloudVerifyRequest):
     """Submit 2FA verification code and get an access token."""
     result = bambu_cloud.verify_2fa(data.tfa_key, data.code)
     if result.error:
-        raise HTTPException(status_code=400, detail=result.error)
+        # Return 422 with the error so the frontend can show it inline
+        # without treating it as an unrecoverable failure.
+        raise HTTPException(status_code=422, detail=result.error)
     return {"token": result.token}
 
 

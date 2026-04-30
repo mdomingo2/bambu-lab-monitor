@@ -159,26 +159,39 @@ def verify_2fa(tfa_key: str, code: str) -> BambuLoginResult:
     try:
         r = httpx.post(
             _TFA_URL,
-            json={"tfaKey": tfa_key, "tfaCode": code},
+            json={"tfaKey": tfa_key, "tfaCode": code, "apiError": ""},
             headers=_AUTH_HEADERS,
             timeout=_TIMEOUT,
         )
         r.raise_for_status()
         body = r.json()
     except httpx.HTTPStatusError as exc:
+        # Try to surface Bambu's actual error message from the response body.
+        try:
+            err_body = exc.response.json()
+            detail = (
+                err_body.get("error")
+                or err_body.get("message")
+                or err_body.get("detail")
+                or str(err_body)
+            )
+        except Exception:
+            detail = exc.response.text or str(exc.response.status_code)
         return BambuLoginResult(
-            needs_2fa=False,
-            error=f"2FA verification failed ({exc.response.status_code})",
+            needs_2fa=True,  # keep needs_2fa=True so frontend stays on 2FA step
+            tfa_key=tfa_key,
+            error=f"Verification failed: {detail}",
         )
     except Exception as exc:
-        return BambuLoginResult(needs_2fa=False, error=str(exc))
+        return BambuLoginResult(needs_2fa=True, tfa_key=tfa_key, error=str(exc))
 
     token = body.get("accessToken") or body.get("access_token")
     if token:
         return BambuLoginResult(needs_2fa=False, token=token)
 
     return BambuLoginResult(
-        needs_2fa=False,
+        needs_2fa=True,
+        tfa_key=tfa_key,
         error=body.get("error") or body.get("message") or "2FA verification failed",
     )
 
