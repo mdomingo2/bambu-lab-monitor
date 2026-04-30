@@ -22,7 +22,7 @@ from typing import Set
 import httpx
 from fastapi import (
     APIRouter, Depends, FastAPI, HTTPException,
-    Response, WebSocket, WebSocketDisconnect,
+    Request, Response, WebSocket, WebSocketDisconnect,
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response as FastAPIResponse
@@ -31,6 +31,7 @@ import auth
 import bambu_cloud
 import database as db
 import ftps
+import rate_limiter
 import thumbnail
 from models import (
     AdminPasswordReset, AlertDismiss, BambuCloudDevicesRequest,
@@ -223,11 +224,36 @@ def health():
 # Auth endpoints  (public — no require_auth)
 # ---------------------------------------------------------------------------
 
+def _client_ip(request: Request) -> str:
+    """Extract the real client IP, preferring the header nginx sets."""
+    return (
+        request.headers.get("X-Real-IP")
+        or request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+        or (request.client.host if request.client else "unknown")
+    )
+
+
 @app.post("/api/auth/login")
-def login(data: UserLogin, response: Response):
+def login(data: UserLogin, request: Request, response: Response):
+    ip = _client_ip(request)
+
+    blocked, retry_after = rate_limiter.limiter.is_blocked(ip)
+    if blocked:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Too many failed login attempts. Try again in {retry_after} seconds.",
+            headers={"Retry-After": str(retry_after)},
+        )
+
     user = db.get_user(data.username)
     if not user or not auth.verify_password(data.password, user.hashed_password):
+        rate_limiter.limiter.record_failure(ip)
+        blocked, retry_after = rate_limiter.limiter.is_blocked(ip)
+        if blocked:
+            logger.warning(f"Login rate limit triggered for IP {ip} after {rate_limiter.limiter.failure_count(ip)} failures")
         raise HTTPException(status_code=401, detail="Invalid username or password")
+
+    rate_limiter.limiter.record_success(ip)
     auth.set_auth_cookie(response, user.username)
     return {"username": user.username, "role": user.role}
 
