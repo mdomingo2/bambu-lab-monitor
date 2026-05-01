@@ -133,6 +133,64 @@ compiles and runs natively on the Pi — no emulation layer:
 
 ---
 
+## Trusting the HTTPS Certificate
+
+The app generates a **self-signed certificate** on first boot and stores it in the
+`bambu_certs` Docker volume on your Pi. Browsers don't trust self-signed certs by
+default, so every device that accesses the dashboard needs to import the cert once.
+
+### Step 1 — Export the certificate from the Pi
+
+```bash
+# SSH into the Pi, then copy the cert to your home directory
+docker compose -C ~/bambu-lab-monitor cp frontend:/etc/nginx/certs/cert.pem ~/bambu-cert.pem
+```
+
+Then transfer it to your computer (e.g. via `scp` or a USB drive):
+
+```bash
+# Run this on your local machine
+scp pi@bambu-pi.local:~/bambu-cert.pem ~/Downloads/bambu-cert.pem
+```
+
+### Step 2 — Install the certificate
+
+**macOS**
+1. Double-click `bambu-cert.pem` — Keychain Access opens.
+2. Drag it into the **System** keychain.
+3. Double-click the imported cert → expand **Trust** → set *"When using this certificate"* to **Always Trust**.
+4. Close and enter your password when prompted.
+
+**Windows**
+1. Double-click `bambu-cert.pem` → click **Install Certificate**.
+2. Choose **Local Machine** → click Next.
+3. Select **Place all certificates in the following store** → browse to **Trusted Root Certification Authorities** → Finish.
+4. Restart your browser.
+
+**Linux (Chrome / Chromium)**
+1. Open `chrome://settings/certificates` → **Authorities** tab → **Import**.
+2. Select `bambu-cert.pem` → check *"Trust this certificate for identifying websites"* → OK.
+
+**Linux (Firefox)**
+Firefox manages its own trust store regardless of OS:
+1. Open `about:preferences#privacy` → scroll to **Certificates** → **View Certificates**.
+2. **Authorities** tab → **Import** → select `bambu-cert.pem` → check *"Trust this CA to identify websites"*.
+
+**Android**
+1. Copy `bambu-cert.pem` to the device.
+2. Go to **Settings → Security → Install a certificate → CA certificate** (exact path varies by manufacturer).
+3. Select the file.
+
+**iOS / iPadOS**
+1. AirDrop or email `bambu-cert.pem` to the device and open it — iOS prompts you to download a profile.
+2. Go to **Settings → General → VPN & Device Management** → tap the profile → **Install**.
+3. Then go to **Settings → General → About → Certificate Trust Settings** and enable full trust for the cert.
+
+> **Note:** You only need to do this once per device. The cert is valid for 10 years
+> and lives in the Docker volume, so it survives container rebuilds.
+
+---
+
 ## Troubleshooting
 
 **Dashboard not loading after install**
