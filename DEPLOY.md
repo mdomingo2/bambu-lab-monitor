@@ -139,6 +139,54 @@ The app generates a **self-signed certificate** on first boot and stores it in t
 `bambu_certs` Docker volume on your Pi. Browsers don't trust self-signed certs by
 default, so every device that accesses the dashboard needs to import the cert once.
 
+### Before you start — make sure `CERT_HOSTS` is set
+
+> **This is the most common reason the cert still fails after installing it.**
+
+Browsers validate the certificate's **Subject Alternative Name (SAN)**, not the
+Common Name. Without `CERT_HOSTS`, the cert only covers `localhost` / `127.0.0.1`,
+so the browser rejects it even if you've already trusted/installed it — because
+the SAN doesn't match the Pi's LAN address you're connecting to.
+
+**On the Pi**, edit (or create) the `.env` file next to `docker-compose.yml`:
+
+```bash
+# Find your Pi's LAN IP
+hostname -I | awk '{print $1}'
+
+# Edit .env
+nano ~/bambu-lab-monitor/.env
+```
+
+Add (or update) this line:
+
+```
+CERT_HOSTS=192.168.1.50          # use your Pi's actual IP
+# or, if you also use a hostname:
+# CERT_HOSTS=192.168.1.50,bambu-pi.local
+```
+
+Then **delete the old cert and restart** so a new one is generated with the correct SAN:
+
+```bash
+cd ~/bambu-lab-monitor
+
+# Delete the existing cert from the Docker volume
+docker compose exec frontend sh -c "rm /etc/nginx/certs/cert.pem /etc/nginx/certs/key.pem"
+
+# Restart the frontend so the entrypoint regenerates the cert
+docker compose restart frontend
+```
+
+Confirm the new cert includes your IP:
+
+```bash
+docker compose exec frontend openssl x509 -in /etc/nginx/certs/cert.pem -noout -ext subjectAltName
+# Should show your IP, e.g.:  IP Address:192.168.1.50
+```
+
+Now export and install the new cert (below).
+
 ### Step 1 — Export the certificate from the Pi
 
 ```bash
@@ -152,6 +200,9 @@ Then transfer it to your computer (e.g. via `scp` or a USB drive):
 # Run this on your local machine
 scp pi@bambu-pi.local:~/bambu-cert.pem ~/Downloads/bambu-cert.pem
 ```
+
+If you previously installed an old version of the cert, **remove it first** before
+importing the new one, then restart your browser.
 
 ### Step 2 — Install the certificate
 
