@@ -102,7 +102,7 @@ changes. The exact steps vary by router brand — look for "DHCP reservation" or
 
 ```bash
 # View live logs from all containers
-docker compose -C ~/bambu-lab-monitor logs -f
+docker compose --project-directory ~/bambu-lab-monitor logs -f
 
 # Restart the stack
 sudo systemctl restart bambu-monitor
@@ -191,7 +191,7 @@ Now export and install the new cert (below).
 
 ```bash
 # SSH into the Pi, then copy the cert to your home directory
-docker compose -C ~/bambu-lab-monitor cp frontend:/etc/nginx/certs/cert.pem ~/bambu-cert.pem
+cd ~/bambu-lab-monitor && docker compose cp frontend:/etc/nginx/certs/cert.pem ~/bambu-cert.pem
 ```
 
 Then transfer it to your computer (e.g. via `scp` or a USB drive):
@@ -247,7 +247,7 @@ Firefox manages its own trust store regardless of OS:
 **Dashboard not loading after install**
 
 The backend health check must pass before nginx starts. Wait ~60 seconds and reload.
-Check logs with `docker compose -C ~/bambu-lab-monitor logs backend`.
+Check logs with `docker compose --project-directory ~/bambu-lab-monitor logs backend`.
 
 **Camera streams not working**
 
