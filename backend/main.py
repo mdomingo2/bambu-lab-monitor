@@ -248,11 +248,15 @@ def login(data: UserLogin, request: Request, response: Response):
     user = db.get_user(data.username)
     if not user or not auth.verify_password(data.password, user.hashed_password):
         rate_limiter.limiter.record_failure(ip)
+        failures = rate_limiter.limiter.failure_count(ip)
         blocked, retry_after = rate_limiter.limiter.is_blocked(ip)
         if blocked:
-            logger.warning(f"Login rate limit triggered for IP {ip} after {rate_limiter.limiter.failure_count(ip)} failures")
+            logger.warning(f"Login blocked for IP {ip} — {failures} failed attempts, locked out for {retry_after}s")
+        else:
+            logger.warning(f"Failed login attempt from IP {ip} for username {data.username!r} (failure #{failures})")
         raise HTTPException(status_code=401, detail="Invalid username or password")
 
+    logger.info(f"Successful login from IP {ip} for username {data.username!r}")
     rate_limiter.limiter.record_success(ip)
     auth.set_auth_cookie(response, user.username)
     return {"username": user.username, "role": user.role}
