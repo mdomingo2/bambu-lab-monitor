@@ -5,19 +5,20 @@ const DEFAULT_SLOTS = 4  // fallback for units with no slot_count
 
 /**
  * Per-model unit label overrides. Index = unit_id from firmware.
- * H2D has two single-slot AMS units — one per nozzle.
+ * H2D has two single-slot AMS units (one per nozzle) plus an
+ * optional high-temperature AMS (unit_id 2) labelled "AMS-HT".
  * All other printers fall back to generic "AMS {n}" labelling.
  */
 const UNIT_LABELS = {
-  H2D: ['Right AMS', 'Left AMS'],
+  H2D: ['Right AMS', 'Left AMS', 'AMS-HT'],
 }
 
 /**
  * Per-model display order of unit_ids.
- * H2D: show Left Nozzle (unit 1) before Right Nozzle (unit 0).
+ * H2D: show Left (unit 1), then Right (unit 0), then HT (unit 2).
  */
 const UNIT_ORDER = {
-  H2D: [1, 0],
+  H2D: [1, 0, 2],
 }
 
 function unitLabel(model, unitIdx, multiUnit) {
