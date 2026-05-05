@@ -538,11 +538,25 @@ async def undismiss_alert(printer_id: str, hms_code: str):
 
 # ── Timelapses ───────────────────────────────────────────────────────────────
 
+# Only these models support timelapse retrieval via FTPS.
+TIMELAPSE_MODELS = {"H2D", "P2S"}
+
+
+def _require_timelapse_support(p) -> None:
+    """Raise 404 if the printer model doesn't support timelapse retrieval."""
+    if p.model not in TIMELAPSE_MODELS:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Timelapse retrieval is not supported for {p.model}",
+        )
+
+
 @router.get("/api/printers/{printer_id}/timelapses")
 async def list_timelapses(printer_id: str):
     p = db.get_printer(printer_id)
     if not p:
         raise HTTPException(status_code=404, detail="Printer not found")
+    _require_timelapse_support(p)
 
     def _list() -> list[str]:
         entries = ftps.list_dir(p.ip, p.access_code, "/timelapse") or []
@@ -569,6 +583,7 @@ async def timelapse_thumb(printer_id: str, filename: str):
     p = db.get_printer(printer_id)
     if not p:
         raise HTTPException(status_code=404, detail="Printer not found")
+    _require_timelapse_support(p)
 
     def _make_thumb() -> bytes | None:
         partial = ftps.download_partial(p.ip, p.access_code, f"/timelapse/{filename}")
@@ -587,6 +602,7 @@ async def download_timelapse(printer_id: str, filename: str):
     p = db.get_printer(printer_id)
     if not p:
         raise HTTPException(status_code=404, detail="Printer not found")
+    _require_timelapse_support(p)
     if "/" in filename or ".." in filename:
         raise HTTPException(status_code=400, detail="Invalid filename")
 

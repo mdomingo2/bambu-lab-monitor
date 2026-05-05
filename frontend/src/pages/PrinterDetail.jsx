@@ -131,12 +131,14 @@ export function PrinterDetail() {
   // Auto-refreshing thumbnail URL — cache-busted every 2 minutes while the page is open.
   const thumbUrl = useThumbnailUrl(id)
 
+  const TIMELAPSE_MODELS = ['H2D', 'P2S']
   useEffect(() => {
+    if (!printer || !TIMELAPSE_MODELS.includes(printer.model)) return
     fetch(`/api/printers/${id}/timelapses`)
       .then((r) => r.json())
       .then((d) => setTimelapses(d.files ?? []))
       .catch(() => {})
-  }, [id])
+  }, [id, printer?.model])
   // ────────────────────────────────────────────────────────────────────────
 
   if (!printer) {
