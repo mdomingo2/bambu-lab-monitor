@@ -545,6 +545,7 @@ export function PrinterDetail() {
         <div className="grid grid-cols-2 gap-x-8 gap-y-2 text-sm">
           {[
             ['IP Address',          printer.ip],
+            ['MAC Address',         printer.mac_address || '—'],
             ['Serial',              printer.serial],
             ['Model',               printer.model],
             ['Nozzle',              st.nozzle_diameter

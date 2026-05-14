@@ -277,11 +277,43 @@ def me(current_user=Depends(auth.require_auth)):
 router = APIRouter(dependencies=[Depends(auth.require_auth)])
 
 
+# ── MAC address lookup ────────────────────────────────────────────────────────
+
+def _lookup_mac(ip: str) -> str | None:
+    """Return the MAC address for a LAN IP by reading the host ARP table.
+
+    /host_arp is the Pi host's /proc/net/arp bind-mounted read-only into the
+    container.  Format per line:
+        IP address  HW type  Flags  HW address           Mask  Device
+        192.168.1.100  0x1    0x2    aa:bb:cc:dd:ee:ff    *     wlan0
+    """
+    try:
+        with open("/host_arp") as f:
+            for line in f:
+                parts = line.split()
+                if (
+                    len(parts) >= 4
+                    and parts[0] == ip
+                    and parts[3] != "00:00:00:00:00:00"
+                ):
+                    return parts[3].upper()
+    except Exception:
+        pass
+    return None
+
+
+def _enrich(p) -> dict:
+    """Return a printer dict with mac_address appended."""
+    data = p.model_dump()
+    data["mac_address"] = _lookup_mac(p.ip)
+    return data
+
+
 # ── Printer CRUD ─────────────────────────────────────────────────────────────
 
 @router.get("/api/printers")
 def list_printers():
-    return [p.model_dump() for p in db.get_all_printers()]
+    return [_enrich(p) for p in db.get_all_printers()]
 
 
 @router.post("/api/printers", status_code=201)
@@ -290,8 +322,9 @@ async def add_printer(data: PrinterCreate):
     saved = db.create_printer(printer)
     mqtt_manager.add_printer(saved)
     await _go2rtc_put(saved)
-    await broadcast({"type": "printers_update", "data": {"action": "add", "printer": saved.model_dump()}})
-    return saved.model_dump()
+    enriched = _enrich(saved)
+    await broadcast({"type": "printers_update", "data": {"action": "add", "printer": enriched}})
+    return enriched
 
 
 @router.get("/api/printers/{printer_id}")
@@ -299,7 +332,7 @@ def get_printer(printer_id: str):
     p = db.get_printer(printer_id)
     if not p:
         raise HTTPException(status_code=404, detail="Printer not found")
-    return p.model_dump()
+    return _enrich(p)
 
 
 @router.patch("/api/printers/{printer_id}")
@@ -310,8 +343,9 @@ async def update_printer(printer_id: str, data: PrinterUpdate):
         raise HTTPException(status_code=404, detail="Printer not found")
     mqtt_manager.update_printer(p)
     await _go2rtc_put(p)
-    await broadcast({"type": "printers_update", "data": {"action": "update", "printer": p.model_dump()}})
-    return p.model_dump()
+    enriched = _enrich(p)
+    await broadcast({"type": "printers_update", "data": {"action": "update", "printer": enriched}})
+    return enriched
 
 
 @router.delete("/api/printers/{printer_id}", status_code=204)
@@ -703,7 +737,7 @@ async def websocket_endpoint(websocket: WebSocket):
         await websocket.send_json({
             "type": "init",
             "data": {
-                "printers":         [p.model_dump() for p in db.get_all_printers()],
+                "printers":         [_enrich(p) for p in db.get_all_printers()],
                 "statuses":         status_cache,
                 "settings":         db.get_settings(),
                 "dismissed_alerts": db.get_all_dismissed_alerts(),
