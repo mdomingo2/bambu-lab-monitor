@@ -2,8 +2,8 @@ services:
   go2rtc:
     image: alexxit/go2rtc
     ports:
-      - "1984:1984"
-      - "8555:8555/tcp"     # WebRTC media port — must be reachable from browser
+      - "127.0.0.1:1984:1984"  # Admin API — localhost only; nginx proxies /go2rtc/
+      - "8555:8555/tcp"        # WebRTC media port — must be reachable from browser
     volumes:
       - ./go2rtc:/config
     environment:
