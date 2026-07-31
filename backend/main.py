@@ -36,7 +36,7 @@ import thumbnail
 from models import (
     AdminPasswordReset, AlertDismiss, BambuCloudDevicesRequest,
     BambuCloudLoginRequest, BambuCloudVerifyRequest,
-    LightControl, PasswordChange, Printer,
+    LightControl, PasswordChange, Printer, PrinterType, PrinterTypeCreate,
     PrintControl, PrinterCreate, PrinterUpdate,
     PrinterStatus, SettingsUpdate, UserCreate, UserLogin,
 )
@@ -359,6 +359,42 @@ async def delete_printer(printer_id: str):
     await broadcast({"type": "printers_update", "data": {"action": "delete", "printer_id": printer_id}})
 
 
+# ── Printer types ────────────────────────────────────────────────────────────
+
+@router.get("/api/printer-types")
+def list_printer_types():
+    return db.get_all_printer_types()
+
+
+@router.post("/api/printer-types", status_code=201)
+def create_printer_type(data: PrinterTypeCreate):
+    name = data.name.strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="Printer type name cannot be empty.")
+    if len(name) > 20:
+        raise HTTPException(status_code=422, detail="Printer type name must be 20 characters or fewer.")
+    existing = db.get_printer_type(name)
+    if existing:
+        raise HTTPException(status_code=409, detail=f"Printer type '{name}' already exists.")
+    pt = PrinterType(
+        name=name,
+        lan_mode_default=data.lan_mode_default,
+        timelapse_support=data.timelapse_support,
+        camera_capable=data.camera_capable,
+    )
+    return db.create_printer_type(pt)
+
+
+@router.delete("/api/printer-types/{name}", status_code=204)
+def delete_printer_type(name: str):
+    try:
+        found = db.delete_printer_type(name)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    if not found:
+        raise HTTPException(status_code=404, detail="Printer type not found.")
+
+
 # ── Settings ─────────────────────────────────────────────────────────────────
 
 @router.get("/api/settings")
@@ -572,13 +608,9 @@ async def undismiss_alert(printer_id: str, hms_code: str):
 
 # ── Timelapses ───────────────────────────────────────────────────────────────
 
-# Only these models support timelapse retrieval via FTPS.
-TIMELAPSE_MODELS = {"H2D", "P2S"}
-
-
 def _require_timelapse_support(p) -> None:
     """Raise 404 if the printer model doesn't support timelapse retrieval."""
-    if p.model not in TIMELAPSE_MODELS:
+    if not db.printer_type_timelapse_supported(p.model):
         raise HTTPException(
             status_code=404,
             detail=f"Timelapse retrieval is not supported for {p.model}",

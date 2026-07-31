@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from sqlalchemy import text
 from sqlmodel import SQLModel, Session, create_engine, select
 
-from models import Printer, FarmSettings, PrintJob, DismissedAlert, User
+from models import Printer, PrinterType, FarmSettings, PrintJob, DismissedAlert, User
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:////app/data/bambu.db")
 
@@ -34,6 +34,15 @@ def init_db() -> None:
     _migrate()
 
 
+_SEED_PRINTER_TYPES = [
+    PrinterType(name="A1",  lan_mode_default=False, timelapse_support=False, camera_capable=False),
+    PrinterType(name="P1S", lan_mode_default=False, timelapse_support=False, camera_capable=True),
+    PrinterType(name="P2S", lan_mode_default=True,  timelapse_support=True,  camera_capable=True),
+    PrinterType(name="H2D", lan_mode_default=True,  timelapse_support=True,  camera_capable=True),
+    PrinterType(name="H2S", lan_mode_default=True,  timelapse_support=True,  camera_capable=True),
+]
+
+
 def _migrate() -> None:
     """Forward-only column migrations for existing databases.
 
@@ -49,6 +58,13 @@ def _migrate() -> None:
             conn.execute(text("ALTER TABLE printer ADD COLUMN lan_mode INTEGER NOT NULL DEFAULT 1"))
             conn.execute(text("UPDATE printer SET lan_mode = 0 WHERE model IN ('A1', 'P1S')"))
             conn.commit()
+
+    # Seed default printer types if the table is empty (first run or fresh install).
+    with Session(engine) as session:
+        if not session.exec(select(PrinterType)).first():
+            for pt in _SEED_PRINTER_TYPES:
+                session.add(pt)
+            session.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -97,6 +113,48 @@ def delete_printer(printer_id: str) -> bool:
         session.delete(p)
         session.commit()
         return True
+
+
+# ---------------------------------------------------------------------------
+# Printer types
+# ---------------------------------------------------------------------------
+
+def get_all_printer_types() -> list[PrinterType]:
+    with Session(engine) as session:
+        return list(session.exec(select(PrinterType).order_by(PrinterType.name)).all())
+
+
+def get_printer_type(name: str) -> PrinterType | None:
+    with Session(engine) as session:
+        return session.get(PrinterType, name)
+
+
+def create_printer_type(pt: PrinterType) -> PrinterType:
+    with Session(engine) as session:
+        session.add(pt)
+        session.commit()
+        session.refresh(pt)
+        return pt
+
+
+def delete_printer_type(name: str) -> bool:
+    """Delete a printer type. Returns False if not found, raises ValueError if in use."""
+    with Session(engine) as session:
+        pt = session.get(PrinterType, name)
+        if not pt:
+            return False
+        in_use = session.exec(select(Printer).where(Printer.model == name)).first()
+        if in_use:
+            raise ValueError(f"Cannot delete '{name}': it is used by one or more printers.")
+        session.delete(pt)
+        session.commit()
+        return True
+
+
+def printer_type_timelapse_supported(model: str) -> bool:
+    with Session(engine) as session:
+        pt = session.get(PrinterType, model)
+        return bool(pt and pt.timelapse_support)
 
 
 # ---------------------------------------------------------------------------

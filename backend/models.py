@@ -27,14 +27,23 @@ import uuid
 # Persisted tables
 # ---------------------------------------------------------------------------
 
+class PrinterType(SQLModel, table=True):
+    """A supported printer model type, user-manageable via API."""
+    name: str = Field(primary_key=True)          # e.g. "P1S", "H2D"
+    lan_mode_default: bool = Field(default=True)  # default LAN Mode checkbox state
+    timelapse_support: bool = Field(default=False) # FTPS timelapse access
+    camera_capable: bool = Field(default=True)    # False = hide/disable LAN Mode toggle (e.g. A1)
+
+
 class Printer(SQLModel, table=True):
     """A Bambu Lab printer registered with the farm."""
     id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
     name: str
-    model: str          # A1 | P1S | P2S | H2D
+    model: str          # A1 | P1S | P2S | H2D | H2S
     ip: str
     serial: str
     access_code: str    # shown on printer screen under Settings → Network
+    has_camera: bool = Field(default=True)
     lan_mode: bool = Field(default=True)
     # lan_mode=True  → camera button is shown; go2rtc connects via RTSP on port 322
     # lan_mode=False → camera button is hidden; A1/A1 mini or LAN Mode off on printer
@@ -87,6 +96,13 @@ class User(SQLModel, table=True):
 # ---------------------------------------------------------------------------
 # Request body schemas
 # ---------------------------------------------------------------------------
+
+class PrinterTypeCreate(BaseModel):
+    name: str
+    lan_mode_default: bool = True
+    timelapse_support: bool = False
+    camera_capable: bool = True
+
 
 class PrinterCreate(BaseModel):
     name: str
