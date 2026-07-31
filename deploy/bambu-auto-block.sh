@@ -1,27 +1,31 @@
 #!/bin/bash
 # bambu-auto-block.sh
 #
-# Two-pass IP blocking for the bambu-lab-monitor nginx container:
+# Owns the DOCKER-USER firewall chain for the bambu-lab-monitor stack.
 #
-#   Pass 1 — FAST attackers:  >= 30 requests in the last 10 minutes
-#   Pass 2 — SLOW scanners:   >= 60 requests in the last 24 hours
+# Two jobs:
 #
-# Blocked IPs are added to ufw and recorded in BLOCKED_FILE so they
-# aren't re-added on subsequent runs.
+#   1. ACCESS POLICY — only the LAN, the Tailscale tailnet and Docker's own
+#      bridges may reach the published web ports.  Everything else is dropped.
+#      This is what makes the app private even if the router's 8443 port
+#      forward is still in place.
 #
-# IMPORTANT — why ufw alone is not enough:
+#   2. ABUSE BLOCKING — scans nginx logs and blocks noisy IPs outright:
+#        Pass 1 — FAST attackers:  >= 30 requests in the last 10 minutes
+#        Pass 2 — SLOW scanners:   >= 60 requests in the last 24 hours
+#
+# IMPORTANT — why ufw is not enough:
 #   The web app is published by Docker (ports 80/8443/8555).  That traffic is
 #   DNAT'd in nat/PREROUTING and traverses FORWARD -> DOCKER; it never reaches
 #   the INPUT chain where ufw's rules live.  A plain "ufw deny from <ip>"
 #   therefore does NOT stop an attacker from reaching nginx.  (Observed: an IP
 #   blocked 2026-05-02 was still served by nginx on 2026-07-31.)
-#   Blocks must additionally be inserted into the DOCKER-USER chain, which
-#   Docker evaluates first for container-bound traffic.
+#   Rules must go in DOCKER-USER, which Docker evaluates first via FORWARD.
 #
-#   Docker recreates DOCKER-USER empty whenever the daemon restarts, so every
-#   run reconciles the chain against BLOCKED_FILE rather than assuming the
-#   rules survived.  The ufw rules are kept as well — they still cover traffic
-#   aimed at host services (e.g. SSH) rather than containers.
+#   Docker recreates DOCKER-USER empty whenever the daemon restarts, so the
+#   whole chain is rebuilt deterministically on every run rather than assuming
+#   previous rules survived.  ufw rules are still added for blocked IPs because
+#   those do cover host services (e.g. SSH) that Docker does not publish.
 #
 # State:  /etc/bambu-monitor/blocked.txt
 # Log:    /var/log/bambu-auto-block.log
@@ -39,6 +43,21 @@ FAST_WINDOW="10m"
 
 SLOW_THRESHOLD=60       # requests in SLOW_WINDOW to trigger block
 SLOW_WINDOW="24h"
+
+# Sources allowed to reach the published web ports.
+#   192.168.1.0/24 — home LAN
+#   100.64.0.0/10  — Tailscale tailnet (CGNAT range)
+#   172.16.0.0/12  — Docker bridge networks (inter-container traffic)
+TRUSTED_SOURCES=(
+    "192.168.1.0/24"
+    "100.64.0.0/10"
+    "172.16.0.0/12"
+    "127.0.0.0/8"
+)
+
+# Ports published by docker-compose that should be private.
+TCP_PORTS="80,443,8443,8555"
+UDP_PORTS="8555"
 
 # Never block these (local network, Docker bridge, loopback)
 WHITELIST=(
@@ -65,39 +84,42 @@ is_whitelisted() {
 
 is_already_blocked() { grep -qxF "$1" "$BLOCKED_FILE" 2>/dev/null; }
 
-# Insert a DROP for $1 at the top of DOCKER-USER unless it is already there.
-# Returns 0 if a rule was added, 1 if it was already present.
-ensure_docker_block() {
-    local ip="$1"
-    if iptables -C DOCKER-USER -s "$ip" -j DROP 2>/dev/null; then
-        return 1
-    fi
-    iptables -I DOCKER-USER 1 -s "$ip" -j DROP
-    return 0
-}
+# Rebuild DOCKER-USER from scratch, in a deterministic order:
+#   established -> blocked IPs -> trusted sources -> drop the rest
+# Rebuilding (rather than appending) keeps the chain correct after a Docker
+# daemon restart, which recreates it empty.
+apply_policy() {
+    iptables -F DOCKER-USER
 
-# Re-apply every known block to DOCKER-USER.  Docker flushes this chain on
-# daemon restart, so without this the blocks silently disappear after a reboot.
-reconcile_docker_blocks() {
-    [[ -f "$BLOCKED_FILE" ]] || return 0
-    local ip restored=0
-    while read -r ip; do
-        [[ -z "$ip" ]] && continue
-        is_whitelisted "$ip" && continue
-        if ensure_docker_block "$ip"; then
-            restored=$(( restored + 1 ))
-        fi
-    done < "$BLOCKED_FILE"
-    (( restored > 0 )) && log "RECONCILE restored $restored DOCKER-USER rule(s) from $BLOCKED_FILE"
-    return 0
+    # Replies to connections the containers themselves opened.
+    iptables -A DOCKER-USER -m conntrack --ctstate RELATED,ESTABLISHED -j RETURN
+
+    # Known-abusive sources, dropped outright.
+    local ip
+    if [[ -f "$BLOCKED_FILE" ]]; then
+        while read -r ip; do
+            [[ -z "$ip" ]] && continue
+            is_whitelisted "$ip" && continue
+            iptables -A DOCKER-USER -s "$ip" -j DROP
+        done < "$BLOCKED_FILE"
+    fi
+
+    # Trusted networks pass through to the normal Docker chains.
+    local net
+    for net in "${TRUSTED_SOURCES[@]}"; do
+        iptables -A DOCKER-USER -s "$net" -j RETURN
+    done
+
+    # Anything else reaching a published web port is dropped.  Non-web traffic
+    # is left alone so container egress keeps working.
+    iptables -A DOCKER-USER -p tcp -m multiport --dports "$TCP_PORTS" -j DROP
+    iptables -A DOCKER-USER -p udp -m multiport --dports "$UDP_PORTS" -j DROP
 }
 
 block_ip() {
     local ip="$1" reason="$2"
-    # Host-bound traffic (SSH and friends).
+    # Host-bound traffic (SSH and friends) — Docker does not route this.
     ufw insert 1 deny from "$ip" to any comment "auto-block:bambu" >/dev/null 2>&1 || true
-    # Container-bound traffic (the web app) — this is the one that matters.
-    ensure_docker_block "$ip" || true
     echo "$ip" >> "$BLOCKED_FILE"
     log "BLOCKED $ip — $reason"
 }
@@ -117,6 +139,8 @@ scan_window() {
 
 # ── Run ───────────────────────────────────────────────────────────────────────
 
-reconcile_docker_blocks
 scan_window "$FAST_WINDOW" "$FAST_THRESHOLD" "fast-attack"
 scan_window "$SLOW_WINDOW" "$SLOW_THRESHOLD" "slow-scan"
+
+# Applied last so newly-blocked IPs are included in the rebuilt chain.
+apply_policy
