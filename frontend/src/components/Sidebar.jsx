@@ -20,15 +20,15 @@ export function Sidebar({ onThemeToggle, theme }) {
   return (
     <aside className="w-16 shrink-0 bg-white border-r border-zinc-200 dark:bg-zinc-950 dark:border-zinc-800 flex flex-col items-center py-4 gap-2">
       {/* Logo */}
-      <div className="w-9 h-9 rounded-lg bg-brand-600 flex items-center justify-center mb-4 shrink-0">
-        <span className="text-lg">🖨</span>
-      </div>
+      <NavLink to="/" title="Justin's 3D Printing Lab" className="mb-4 shrink-0">
+        <img src="/logo-badge.png" alt="Justin's 3D Printing Lab" className="w-10 h-10" />
+      </NavLink>
 
       <NavLink
         to="/"
         end
         className={({ isActive }) =>
-          clsx('btn-ghost flex flex-col items-center gap-0.5 py-2 px-2 text-[10px]',
+          clsx('btn-ghost flex flex-col items-center gap-0.5 py-2 px-2 text-[10px] font-display font-semibold uppercase tracking-wide',
             isActive && 'text-brand-600 bg-brand-50 dark:text-brand-400 dark:bg-brand-900/30')
         }
       >
@@ -39,7 +39,7 @@ export function Sidebar({ onThemeToggle, theme }) {
       <NavLink
         to="/history"
         className={({ isActive }) =>
-          clsx('btn-ghost flex flex-col items-center gap-0.5 py-2 px-2 text-[10px]',
+          clsx('btn-ghost flex flex-col items-center gap-0.5 py-2 px-2 text-[10px] font-display font-semibold uppercase tracking-wide',
             isActive && 'text-brand-600 bg-brand-50 dark:text-brand-400 dark:bg-brand-900/30')
         }
       >
@@ -50,7 +50,7 @@ export function Sidebar({ onThemeToggle, theme }) {
       <NavLink
         to="/setup"
         className={({ isActive }) =>
-          clsx('btn-ghost flex flex-col items-center gap-0.5 py-2 px-2 text-[10px]',
+          clsx('btn-ghost flex flex-col items-center gap-0.5 py-2 px-2 text-[10px] font-display font-semibold uppercase tracking-wide',
             isActive && 'text-brand-600 bg-brand-50 dark:text-brand-400 dark:bg-brand-900/30')
         }
       >

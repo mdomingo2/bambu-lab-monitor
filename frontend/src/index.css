@@ -1,3 +1,55 @@
+/* ── Brand fonts (self-hosted, latin subsets) ─────────────────────────── */
+@font-face {
+  font-family: 'Saira Condensed';
+  font-style: normal; font-weight: 500; font-display: swap;
+  src: url('/fonts/saira-condensed-500.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Saira Condensed';
+  font-style: normal; font-weight: 600; font-display: swap;
+  src: url('/fonts/saira-condensed-600.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Saira Condensed';
+  font-style: normal; font-weight: 700; font-display: swap;
+  src: url('/fonts/saira-condensed-700.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Saira Condensed';
+  font-style: normal; font-weight: 800; font-display: swap;
+  src: url('/fonts/saira-condensed-800.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Barlow';
+  font-style: normal; font-weight: 400; font-display: swap;
+  src: url('/fonts/barlow-400.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Barlow';
+  font-style: italic; font-weight: 400; font-display: swap;
+  src: url('/fonts/barlow-400-italic.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Barlow';
+  font-style: normal; font-weight: 500; font-display: swap;
+  src: url('/fonts/barlow-500.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Barlow';
+  font-style: normal; font-weight: 600; font-display: swap;
+  src: url('/fonts/barlow-600.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Barlow';
+  font-style: normal; font-weight: 700; font-display: swap;
+  src: url('/fonts/barlow-700.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal; font-weight: 400 700; font-display: swap;
+  src: url('/fonts/jetbrains-mono-400.woff2') format('woff2');
+}
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -11,21 +63,38 @@
 
 @layer components {
   .card {
-    @apply bg-white border border-zinc-200 rounded-xl dark:bg-zinc-900 dark:border-zinc-800;
+    @apply bg-white border border-zinc-200 rounded-lg shadow-sm dark:bg-zinc-900 dark:border-white/10;
   }
+  /* Primary action: filament orange, machined uppercase display type */
   .btn-primary {
-    @apply bg-brand-600 hover:bg-brand-500 text-white font-medium px-4 py-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed;
+    @apply bg-brand-500 hover:bg-brand-600 active:translate-y-px text-navy-950 font-display font-bold uppercase tracking-wide px-4 py-2 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed;
   }
   .btn-ghost {
     @apply text-zinc-500 hover:text-zinc-900 hover:bg-zinc-100 px-3 py-2 rounded-lg transition-colors dark:text-zinc-400 dark:hover:text-zinc-100 dark:hover:bg-zinc-800;
   }
   .btn-danger {
-    @apply bg-red-100 hover:bg-red-200 text-red-600 hover:text-red-700 font-medium px-4 py-2 rounded-lg transition-colors dark:bg-red-900/40 dark:hover:bg-red-900/70 dark:text-red-400 dark:hover:text-red-300;
+    @apply bg-red-100 hover:bg-red-200 text-red-600 hover:text-red-700 font-display font-bold uppercase tracking-wide px-4 py-2 rounded transition-colors dark:bg-red-900/40 dark:hover:bg-red-900/70 dark:text-red-400 dark:hover:text-red-300;
   }
   .input {
-    @apply bg-white border border-zinc-300 text-zinc-900 placeholder-zinc-400 rounded-lg px-3 py-2 w-full focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500 transition-colors dark:bg-zinc-800 dark:border-zinc-700 dark:text-zinc-100 dark:placeholder-zinc-500;
+    @apply bg-white border border-zinc-300 text-zinc-900 placeholder-zinc-400 rounded px-3 py-2 w-full focus:outline-none focus:border-brand-500 focus:shadow-focus-brand transition-colors dark:bg-navy-900 dark:border-zinc-700 dark:text-zinc-100 dark:placeholder-zinc-500;
   }
   .label {
-    @apply text-sm font-medium text-zinc-500 dark:text-zinc-400 mb-1 block;
+    @apply text-xs font-display font-semibold uppercase tracking-eyebrow text-zinc-500 dark:text-zinc-400 mb-1 block;
+  }
+  /* Page titles: condensed display face, uppercase — the badge voice */
+  .heading {
+    @apply font-display font-bold uppercase text-zinc-900 dark:text-zinc-100;
+  }
+  /* Signature motif: three extrusion layers fading upward-to-downward */
+  .layer-rule {
+    height: 12px;
+    width: 52px;
+    background-image:
+      linear-gradient(#F0812B, #F0812B),
+      linear-gradient(rgba(240, 129, 43, 0.72), rgba(240, 129, 43, 0.72)),
+      linear-gradient(rgba(240, 129, 43, 0.44), rgba(240, 129, 43, 0.44));
+    background-size: 100% 2px;
+    background-position: 0 0, 0 5px, 0 10px;
+    background-repeat: no-repeat;
   }
 }

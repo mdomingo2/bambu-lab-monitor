@@ -17,8 +17,9 @@ export const CHAMBER_TEMP_MIN = 15
  * Used on PrinterCard tiles to give each model a distinct identity.
  */
 export const MODEL_ACCENT = {
-  A1:  'border-t-violet-500',
+  A1:  'border-t-steel-400',
   P1S: 'border-t-brand-500',
   P2S: 'border-t-emerald-500',
   H2D: 'border-t-amber-500',
+  H2S: 'border-t-navy-500',
 }

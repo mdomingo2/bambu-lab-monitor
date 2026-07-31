@@ -16,7 +16,11 @@ export function FarmView() {
     <div className="flex-1 overflow-y-auto p-6">
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold text-zinc-900 dark:text-zinc-100">{farmName}</h1>
+          <div className="layer-rule mb-2" aria-hidden="true" />
+          <p className="text-xs font-display font-bold uppercase tracking-eyebrow text-zinc-500 dark:text-zinc-400">
+            Justin&rsquo;s 3D Printing Lab
+          </p>
+          <h1 className="heading text-3xl leading-tight">{farmName}</h1>
           <p className="text-sm text-zinc-500 mt-0.5">
             {printers.length} printer{printers.length !== 1 && 's'} ·{' '}
             <span className="text-emerald-600 dark:text-emerald-500">{printing} printing</span> ·{' '}
@@ -31,8 +35,8 @@ export function FarmView() {
 
       {printers.length === 0 ? (
         <div className="flex flex-col items-center justify-center h-64 text-zinc-400 gap-3">
-          <span className="text-5xl">🖨</span>
-          <p className="text-lg font-medium">No printers configured</p>
+          <img src="/logo-badge.png" alt="" className="w-20 h-20 opacity-60 saturate-0" />
+          <p className="text-lg font-display font-semibold uppercase tracking-wide">No printers configured</p>
           <Link to="/setup" className="btn-primary text-sm">Add your first printer</Link>
         </div>
       ) : (

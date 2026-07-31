@@ -32,3 +32,7 @@ Thumbs.db
 
 # Claude Code session data
 .claude/
+
+# TLS certs & runtime files (private key must never be committed)
+certs/
+host_arp

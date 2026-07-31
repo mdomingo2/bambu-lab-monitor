@@ -131,7 +131,7 @@ export function PrinterDetail() {
   // Auto-refreshing thumbnail URL — cache-busted every 2 minutes while the page is open.
   const thumbUrl = useThumbnailUrl(id)
 
-  const TIMELAPSE_MODELS = ['H2D', 'P2S']
+  const TIMELAPSE_MODELS = ['H2D', 'H2S', 'P2S']
   useEffect(() => {
     if (!printer || !TIMELAPSE_MODELS.includes(printer.model)) return
     fetch(`/api/printers/${id}/timelapses`)
@@ -227,7 +227,7 @@ export function PrinterDetail() {
 
         <div className="flex-1">
           <div className="flex items-center gap-3 flex-wrap">
-            <h1 className="text-2xl font-bold text-zinc-900 dark:text-zinc-100">{printer.name}</h1>
+            <h1 className="heading text-3xl leading-tight">{printer.name}</h1>
             <span className="text-xs text-zinc-400 font-mono bg-zinc-100 dark:bg-zinc-800 px-2 py-0.5 rounded">
               {printer.model}
             </span>

@@ -22,14 +22,14 @@ export function IdlePlaceholder({ state }) {
           {/* paper */}
           <rect x="16" y="9" width="16" height="17" rx="1.5" fill="white" />
           {/* checkmark */}
-          <path d="M20 18.5 L23 21.5 L29 14.5" stroke="#10b981" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M20 18.5 L23 21.5 L29 14.5" stroke="#2E8B57" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
           {/* confetti */}
-          <circle cx="4"  cy="10" r="2"   fill="#fbbf24" opacity="0.8" />
-          <circle cx="48" cy="8"  r="1.5" fill="#fbbf24" opacity="0.7" />
-          <circle cx="46" cy="34" r="2"   fill="#93c5fd" opacity="0.7" />
-          <circle cx="6"  cy="34" r="1.5" fill="#86efac" opacity="0.7" />
-          <circle cx="48" cy="22" r="1"   fill="#f9a8d4" opacity="0.8" />
-          <circle cx="4"  cy="24" r="1"   fill="#93c5fd" opacity="0.6" />
+          <circle cx="4"  cy="10" r="2"   fill="#F0812B" opacity="0.8" />
+          <circle cx="48" cy="8"  r="1.5" fill="#F0812B" opacity="0.7" />
+          <circle cx="46" cy="34" r="2"   fill="#9FB0B9" opacity="0.7" />
+          <circle cx="6"  cy="34" r="1.5" fill="#2E8B57" opacity="0.7" />
+          <circle cx="48" cy="22" r="1"   fill="#FF9A4D" opacity="0.8" />
+          <circle cx="4"  cy="24" r="1"   fill="#9FB0B9" opacity="0.6" />
         </svg>
       ) : (
         /* ── Idle: printer + blank paper + sparkle dots ── */
@@ -43,13 +43,13 @@ export function IdlePlaceholder({ state }) {
           {/* blank paper */}
           <rect x="16" y="9" width="16" height="17" rx="1.5" fill="white" />
           {/* dashes suggesting empty page */}
-          <line x1="19" y1="15" x2="29" y2="15" stroke="#d4d4d8" strokeWidth="1.5" strokeLinecap="round" strokeDasharray="2 2" />
-          <line x1="19" y1="19" x2="27" y2="19" stroke="#d4d4d8" strokeWidth="1.5" strokeLinecap="round" strokeDasharray="2 2" />
+          <line x1="19" y1="15" x2="29" y2="15" stroke="#C3CED4" strokeWidth="1.5" strokeLinecap="round" strokeDasharray="2 2" />
+          <line x1="19" y1="19" x2="27" y2="19" stroke="#C3CED4" strokeWidth="1.5" strokeLinecap="round" strokeDasharray="2 2" />
           {/* sparkles */}
-          <circle cx="4"  cy="10" r="2"   fill="#93c5fd" opacity="0.7" />
-          <circle cx="48" cy="12" r="1.5" fill="#c4b5fd" opacity="0.7" />
-          <circle cx="46" cy="30" r="1"   fill="#93c5fd" opacity="0.5" />
-          <circle cx="5"  cy="28" r="1.5" fill="#c4b5fd" opacity="0.5" />
+          <circle cx="4"  cy="10" r="2"   fill="#9FB0B9" opacity="0.7" />
+          <circle cx="48" cy="12" r="1.5" fill="#F0812B" opacity="0.7" />
+          <circle cx="46" cy="30" r="1"   fill="#9FB0B9" opacity="0.5" />
+          <circle cx="5"  cy="28" r="1.5" fill="#F0812B" opacity="0.5" />
         </svg>
       )}
       <p className="text-[11px] font-medium text-zinc-400 dark:text-zinc-500 tracking-wide">

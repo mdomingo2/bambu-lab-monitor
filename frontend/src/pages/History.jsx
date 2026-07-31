@@ -187,7 +187,7 @@ export function History() {
       {/* Header */}
       <div className="flex items-center gap-3 mb-5 flex-wrap">
         <Film size={20} className="text-zinc-400" />
-        <h1 className="text-2xl font-bold text-zinc-900 dark:text-zinc-100">Print History</h1>
+        <h1 className="heading text-3xl leading-tight">Print History</h1>
         <span className="text-sm text-zinc-400 ml-auto">{jobs.length} jobs</span>
       </div>
 
