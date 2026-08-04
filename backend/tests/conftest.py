@@ -24,6 +24,7 @@ from sqlmodel.pool import StaticPool
 # ── In-memory test database ───────────────────────────────────────────────────
 
 import database as _db
+from models import PrinterType
 
 _TEST_ENGINE = create_engine(
     "sqlite://",
@@ -32,6 +33,39 @@ _TEST_ENGINE = create_engine(
 )
 # Replace the production engine before main.py is imported
 _db.engine = _TEST_ENGINE
+
+
+# Snapshot the seed rows as plain dicts at import time.  database.py's
+# _SEED_PRINTER_TYPES are model instances that get attached to a Session when
+# _migrate() seeds them during app startup; once that Session closes they are
+# detached, and reading pt.name later raises DetachedInstanceError.  Copying
+# the values now — before anything persists them — sidesteps that entirely.
+_SEED_TYPE_ROWS = [
+    {
+        "name": pt.name,
+        "lan_mode_default": pt.lan_mode_default,
+        "timelapse_support": pt.timelapse_support,
+        "camera_capable": pt.camera_capable,
+    }
+    for pt in _db._SEED_PRINTER_TYPES
+]
+
+
+def _seed_printer_types() -> None:
+    """Re-seed the default printer types.
+
+    Printer types are reference data, not per-test state: in production
+    database._migrate() seeds them once and they are always present.  The
+    clean_tables fixture truncates every table, so without this the table
+    would be empty from the second test onward and anything driven off it
+    — the timelapse gate, LAN Mode defaults — would silently misbehave.
+    """
+    with Session(_TEST_ENGINE) as session:
+        if session.exec(select(PrinterType)).first():
+            return
+        for row in _SEED_TYPE_ROWS:
+            session.add(PrinterType(**row))
+        session.commit()
 
 # ── Shared test payload ───────────────────────────────────────────────────────
 
@@ -93,6 +127,7 @@ def client():
 def clean_tables():
     """Truncate all tables before every test so tests are fully independent."""
     SQLModel.metadata.create_all(_TEST_ENGINE)
+    _seed_printer_types()
     yield
     with Session(_TEST_ENGINE) as session:
         for table in reversed(SQLModel.metadata.sorted_tables):
