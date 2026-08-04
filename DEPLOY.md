@@ -169,6 +169,41 @@ If a printer is missing, check `docker compose logs backend | grep go2rtc` for a
 rewrites it as streams are registered, which is why it is gitignored and generated
 from `go2rtc.yaml.example`. Printer streams belong in the web UI, not in that file.
 
+**`could not register ... 400 Bad Request` on every backend start**
+
+Expected on go2rtc 1.9.14, and harmless. go2rtc cannot patch a stream key it
+loaded from its own config file: the PUT returns
+`400 yaml: line N: did not find expected key`, pointing at the `streams:` node.
+The stream is still applied in memory, so cameras work — only the write-back to
+disk is skipped. Registrations for *new* printers (keys not yet in the file)
+return 200 and do persist.
+
+The practical consequence: if you change a printer's IP or access code, go2rtc's
+memory updates but `go2rtc.yaml` keeps the old value. Restarting the backend
+re-applies the correct value, so cameras recover on their own. It only bites if
+go2rtc restarts *without* the backend — it then loads the stale URL from disk.
+Restart the backend to fix it:
+
+```bash
+docker compose -C ~/bambu-lab-monitor restart backend
+```
+
+**Do not work around this with DELETE-then-PUT.** go2rtc's append-after-delete
+writes malformed YAML: it appends the new URL to the *preceding* stream's
+producer list and writes the new key at the wrong indentation. That gives one
+printer a second producer pointing at another printer's camera, and the broken
+indentation then makes every later write-back fail — which is how a config ends
+up silently stale in the first place.
+
+To rebuild the file from the database as the source of truth, regenerate the
+`streams:` block, keeping one two-space-indented `- rtsps://…` line per printer,
+then restart go2rtc and the backend and confirm each stream has exactly one
+producer:
+
+```bash
+curl -s http://localhost:1984/api/streams | python3 -m json.tool
+```
+
 **Out of disk space**
 
 The SD card fills up if old Docker images accumulate. Clean up with:
