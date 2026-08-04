@@ -313,7 +313,8 @@ class TestUserManagement:
 
 class TestTimelapseModelGate:
     """Timelapse retrieval over FTPS is only offered on models that store
-    timelapses on the SD card — see TIMELAPSE_MODELS in main.py."""
+    timelapses on the SD card — see printer_type_timelapse_supported in
+    database.py, which drives the gate off the user-managed printer types."""
 
     def _printer(self, client, model):
         payload = {**PRINTER_PAYLOAD, "model": model, "serial": f"SN{model}"}
