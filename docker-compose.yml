@@ -1,6 +1,9 @@
 services:
   go2rtc:
-    image: alexxit/go2rtc
+    # Pinned deliberately.  Unpinned, this tracks :latest and any `pull` can
+    # swap the version under a running farm.  1.9.14 is also the version the
+    # config write-back limitation in DEPLOY.md was characterised against.
+    image: alexxit/go2rtc:1.9.14
     ports:
       - "127.0.0.1:1984:1984"  # Admin API — localhost only; nginx proxies /go2rtc/
       - "8555:8555/tcp"        # WebRTC media port — must be reachable from browser

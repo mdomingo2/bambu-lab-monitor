@@ -16,8 +16,8 @@ import asyncio
 import logging
 import os
 import secrets
-from contextlib import asynccontextmanager
-from typing import Set
+from contextlib import asynccontextmanager, suppress
+from typing import Annotated, Set
 
 import httpx
 from fastapi import (
@@ -53,6 +53,11 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 GO2RTC_URL = os.getenv("GO2RTC_URL", "http://go2rtc:1984")
 
+# How often to re-check go2rtc's streams against the database.  0 disables the
+# background loop (the test suite sets this, and drives _go2rtc_reconcile
+# directly instead of waiting on a timer).
+GO2RTC_RECONCILE_SECONDS = int(os.getenv("GO2RTC_RECONCILE_SECONDS", "60"))
+
 # ---------------------------------------------------------------------------
 # In-memory state
 # ---------------------------------------------------------------------------
@@ -68,6 +73,35 @@ _print_sessions: dict[str, str] = {}
 # go2rtc integration
 # ---------------------------------------------------------------------------
 
+# go2rtc (1.9.14) cannot patch a stream key it loaded from its own config file:
+# the stream *is* applied in memory, but writing the config back fails with
+# 400 "yaml: line N: did not find expected key".  Every restart therefore logs
+# one of these per pre-existing printer.  Recognising it keeps that expected
+# noise out of the warning stream — see DEPLOY.md for the full write-up.
+_GO2RTC_WRITEBACK_BUG = "did not find expected key"
+
+
+def _go2rtc_stream_name(printer_id: str) -> str:
+    """go2rtc stream key for a printer.  CameraModal.jsx opens the same name."""
+    return f"bambu_{printer_id}"
+
+
+def _go2rtc_src(printer: Printer) -> str:
+    """RTSPS source URL for a printer's camera."""
+    return f"rtsps://bblp:{printer.access_code}@{printer.ip}:322/streaming/live/1"
+
+
+def _is_writeback_bug(exc: Exception) -> bool:
+    """True for the known go2rtc config write-back failure (stream still applied)."""
+    resp = getattr(exc, "response", None)
+    if resp is None or getattr(resp, "status_code", None) != 400:
+        return False
+    try:
+        return _GO2RTC_WRITEBACK_BUG in resp.text
+    except Exception:
+        return False
+
+
 async def _go2rtc_put(printer: Printer) -> None:
     """Register or update a printer's RTSPS stream in go2rtc.
 
@@ -77,8 +111,8 @@ async def _go2rtc_put(printer: Printer) -> None:
     nothing while still looking like a success.  Both params are required:
         PUT /api/streams?name=<stream name>&src=<rtsps url>
     """
-    name = f"bambu_{printer.id}"
-    url = f"rtsps://bblp:{printer.access_code}@{printer.ip}:322/streaming/live/1"
+    name = _go2rtc_stream_name(printer.id)
+    url = _go2rtc_src(printer)
     try:
         async with httpx.AsyncClient(timeout=3) as client:
             resp = await client.put(
@@ -88,7 +122,13 @@ async def _go2rtc_put(printer: Printer) -> None:
             resp.raise_for_status()
         logger.info(f"go2rtc: registered {printer.name!r} as {name}")
     except Exception as exc:
-        logger.warning(f"go2rtc: could not register {printer.name!r}: {exc}")
+        if _is_writeback_bug(exc):
+            logger.info(
+                f"go2rtc: applied {printer.name!r} as {name}; config write-back "
+                f"skipped (known go2rtc limitation, stream is live)"
+            )
+        else:
+            logger.warning(f"go2rtc: could not register {printer.name!r}: {exc}")
 
 
 async def _go2rtc_delete(printer_id: str) -> None:
@@ -97,7 +137,7 @@ async def _go2rtc_delete(printer_id: str) -> None:
     DELETE identifies the stream by ?src= — go2rtc uses that param as the key
     into its stream map here, so ?name= is ignored and deletes nothing.
     """
-    name = f"bambu_{printer_id}"
+    name = _go2rtc_stream_name(printer_id)
     try:
         async with httpx.AsyncClient(timeout=3) as client:
             resp = await client.delete(
@@ -108,6 +148,71 @@ async def _go2rtc_delete(printer_id: str) -> None:
         logger.info(f"go2rtc: removed {name}")
     except Exception as exc:
         logger.warning(f"go2rtc: could not remove {name}: {exc}")
+
+
+async def _go2rtc_live_streams() -> dict[str, str] | None:
+    """Map of stream name → first producer URL, as go2rtc currently holds it.
+
+    Returns None when go2rtc could not be reached, so callers can tell "go2rtc
+    has no streams" (which needs repair) apart from "go2rtc did not answer"
+    (which does not — re-registering into the void achieves nothing).
+    """
+    try:
+        async with httpx.AsyncClient(timeout=3) as client:
+            resp = await client.get(f"{GO2RTC_URL}/api/streams")
+            resp.raise_for_status()
+            data = resp.json()
+    except Exception as exc:
+        logger.debug(f"go2rtc: could not list streams: {exc}")
+        return None
+
+    live: dict[str, str] = {}
+    for name, info in (data or {}).items():
+        producers = (info or {}).get("producers") or []
+        live[name] = (producers[0] or {}).get("url", "") if producers else ""
+    return live
+
+
+async def _go2rtc_reconcile() -> int:
+    """Re-register any printer whose stream is missing or wrong in go2rtc.
+
+    The database is the source of truth.  Two things put go2rtc out of step
+    with it, and registering only at startup fixes neither:
+
+      - go2rtc restarting on its own reloads whatever is in its config file,
+        losing every stream the backend added since.
+      - go2rtc cannot write an updated URL back to that file for a stream it
+        loaded from disk, so a printer whose IP or access code changed keeps
+        the stale URL there and picks it up on the next go2rtc restart.
+
+    Re-registering repairs both, because the PUT is applied in memory even
+    when the config write-back fails.  Returns the number of streams repaired.
+    """
+    live = await _go2rtc_live_streams()
+    if live is None:
+        return 0
+
+    repaired = 0
+    for printer in db.get_all_printers():
+        if live.get(_go2rtc_stream_name(printer.id)) != _go2rtc_src(printer):
+            await _go2rtc_put(printer)
+            repaired += 1
+
+    if repaired:
+        logger.info(f"go2rtc: reconciled {repaired} stream(s) against the database")
+    return repaired
+
+
+async def _go2rtc_reconcile_loop(interval: int) -> None:
+    """Run _go2rtc_reconcile forever, surviving individual failures."""
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            await _go2rtc_reconcile()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning(f"go2rtc: reconcile pass failed: {exc}")
 
 
 # ---------------------------------------------------------------------------
@@ -213,7 +318,20 @@ async def lifespan(app: FastAPI):
         mqtt_manager.add_printer(printer)
         await _go2rtc_put(printer)
 
+    # Keep go2rtc in step with the database for as long as we are running;
+    # registering once at startup leaves it stale if go2rtc restarts alone.
+    reconcile_task: asyncio.Task | None = None
+    if GO2RTC_RECONCILE_SECONDS > 0:
+        reconcile_task = asyncio.create_task(
+            _go2rtc_reconcile_loop(GO2RTC_RECONCILE_SECONDS)
+        )
+
     yield
+
+    if reconcile_task:
+        reconcile_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await reconcile_task
 
     if mqtt_manager:
         mqtt_manager.stop_all()
@@ -328,6 +446,23 @@ def _enrich(p) -> dict:
     return data
 
 
+def get_printer_or_404(printer_id: str) -> Printer:
+    """Resolve a {printer_id} path param, 404ing if there is no such printer.
+
+    Used as a dependency so the lookup-and-404 does not have to be repeated —
+    and cannot be forgotten — in every per-printer route.
+    """
+    p = db.get_printer(printer_id)
+    if not p:
+        raise HTTPException(status_code=404, detail="Printer not found")
+    return p
+
+
+# Annotated alias so routes read `printer: PrinterDep` instead of carrying a
+# Depends(...) default, which keeps them free of B008 noqa comments.
+PrinterDep = Annotated[Printer, Depends(get_printer_or_404)]
+
+
 # ── Printer CRUD ─────────────────────────────────────────────────────────────
 
 @router.get("/api/printers")
@@ -347,10 +482,7 @@ async def add_printer(data: PrinterCreate):
 
 
 @router.get("/api/printers/{printer_id}")
-def get_printer(printer_id: str):
-    p = db.get_printer(printer_id)
-    if not p:
-        raise HTTPException(status_code=404, detail="Printer not found")
+def get_printer(p: PrinterDep):
     return _enrich(p)
 
 
@@ -497,10 +629,7 @@ def admin_reset_password(username: str, data: AdminPasswordReset, current_user=D
 # ── Thumbnails ───────────────────────────────────────────────────────────────
 
 @router.get("/api/printers/{printer_id}/thumbnail")
-async def get_thumbnail(printer_id: str):
-    p = db.get_printer(printer_id)
-    if not p:
-        raise HTTPException(status_code=404, detail="Printer not found")
+async def get_thumbnail(printer_id: str, p: PrinterDep):
 
     st = status_cache.get(printer_id, {})
     cover   = st.get("cover_file", "")
@@ -527,10 +656,7 @@ async def get_thumbnail(printer_id: str):
 
 
 @router.get("/api/printers/{printer_id}/thumbnail/debug")
-async def debug_thumbnail(printer_id: str):
-    p = db.get_printer(printer_id)
-    if not p:
-        raise HTTPException(status_code=404, detail="Printer not found")
+async def debug_thumbnail(printer_id: str, p: PrinterDep):
 
     st = status_cache.get(printer_id, {})
     return {
@@ -548,10 +674,7 @@ async def debug_thumbnail(printer_id: str):
 # ── Print controls ───────────────────────────────────────────────────────────
 
 @router.post("/api/printers/{printer_id}/control")
-async def control_print(printer_id: str, data: PrintControl):
-    p = db.get_printer(printer_id)
-    if not p:
-        raise HTTPException(status_code=404, detail="Printer not found")
+async def control_print(printer_id: str, p: PrinterDep, data: PrintControl):
 
     action = data.action.lower()
     if action not in ("pause", "resume", "stop"):
@@ -564,10 +687,7 @@ async def control_print(printer_id: str, data: PrintControl):
 
 
 @router.post("/api/printers/{printer_id}/light")
-async def control_light(printer_id: str, data: LightControl):
-    p = db.get_printer(printer_id)
-    if not p:
-        raise HTTPException(status_code=404, detail="Printer not found")
+async def control_light(printer_id: str, p: PrinterDep, data: LightControl):
 
     mode = data.mode.lower()
     if mode not in ("on", "off"):
@@ -598,10 +718,7 @@ def list_dismissed_alerts(printer_id: str):
 
 
 @router.post("/api/printers/{printer_id}/dismissed-alerts", status_code=201)
-async def dismiss_alert(printer_id: str, data: AlertDismiss):
-    p = db.get_printer(printer_id)
-    if not p:
-        raise HTTPException(status_code=404, detail="Printer not found")
+async def dismiss_alert(printer_id: str, p: PrinterDep, data: AlertDismiss):
     db.dismiss_alert(printer_id, data.hms_code)
     dismissed = db.get_dismissed_alerts(printer_id)
     await broadcast({
@@ -612,10 +729,7 @@ async def dismiss_alert(printer_id: str, data: AlertDismiss):
 
 
 @router.delete("/api/printers/{printer_id}/dismissed-alerts/{hms_code}", status_code=200)
-async def undismiss_alert(printer_id: str, hms_code: str):
-    p = db.get_printer(printer_id)
-    if not p:
-        raise HTTPException(status_code=404, detail="Printer not found")
+async def undismiss_alert(printer_id: str, p: PrinterDep, hms_code: str):
     db.undismiss_alert(printer_id, hms_code)
     dismissed = db.get_dismissed_alerts(printer_id)
     await broadcast({
@@ -637,10 +751,7 @@ def _require_timelapse_support(p) -> None:
 
 
 @router.get("/api/printers/{printer_id}/timelapses")
-async def list_timelapses(printer_id: str):
-    p = db.get_printer(printer_id)
-    if not p:
-        raise HTTPException(status_code=404, detail="Printer not found")
+async def list_timelapses(p: PrinterDep):
     _require_timelapse_support(p)
 
     def _list() -> list[str]:
@@ -665,6 +776,9 @@ async def timelapse_thumb(printer_id: str, filename: str):
     if cache_key in thumbnail.cache:
         return FastAPIResponse(content=thumbnail.cache[cache_key], media_type="image/jpeg")
 
+    # Looked up here rather than via the PrinterDep dependency on purpose: a
+    # dependency runs before the handler, so it would turn the cache hit above
+    # into a database read on every request.
     p = db.get_printer(printer_id)
     if not p:
         raise HTTPException(status_code=404, detail="Printer not found")
@@ -683,10 +797,7 @@ async def timelapse_thumb(printer_id: str, filename: str):
 
 
 @router.get("/api/printers/{printer_id}/timelapses/{filename}")
-async def download_timelapse(printer_id: str, filename: str):
-    p = db.get_printer(printer_id)
-    if not p:
-        raise HTTPException(status_code=404, detail="Printer not found")
+async def download_timelapse(p: PrinterDep, filename: str):
     _require_timelapse_support(p)
     if "/" in filename or ".." in filename:
         raise HTTPException(status_code=400, detail="Invalid filename")

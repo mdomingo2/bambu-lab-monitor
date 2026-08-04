@@ -13,6 +13,9 @@ Strategy:
 import os
 # Must be set before any app module import (database.py reads it at load time)
 os.environ["DATABASE_URL"] = "sqlite://"
+# No background go2rtc reconcile timer under test — tests call
+# main._go2rtc_reconcile() directly rather than waiting on a clock.
+os.environ["GO2RTC_RECONCILE_SECONDS"] = "0"
 
 import pytest
 from unittest.mock import patch, AsyncMock
