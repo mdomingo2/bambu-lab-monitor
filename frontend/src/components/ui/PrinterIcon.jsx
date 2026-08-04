@@ -7,7 +7,7 @@
  * Usage:
  *   <PrinterIcon model="P1S" size={48} className="text-brand-500" />
  *
- * Supported models: A1, P1S, P2S, H2D
+ * Supported models: A1, P1S, P2S, H2D, H2S
  * Falls back to a generic box icon for unknown models.
  */
 
@@ -147,6 +147,39 @@ function H2DIcon({ size }) {
   )
 }
 
+// ── H2S — single-extruder enclosed ───────────────────────────────────────────
+//
+//  Same H2-series enclosure as the H2D, but with one centred toolhead instead
+//  of two — the H2S is the single-nozzle member of the H2 family.
+//
+function H2SIcon({ size }) {
+  return (
+    <svg viewBox="0 0 40 40" width={size} height={size} fill="currentColor" aria-hidden="true">
+      {/* Enclosure body */}
+      <rect x="4" y="2" width="32" height="36" rx="3" opacity="0.12" />
+      <rect x="4"    y="2"    width="32" height="3.5" rx="2" />
+      <rect x="4"    y="34.5" width="32" height="3.5" rx="2" />
+      <rect x="4"    y="2"    width="3.5" height="36" rx="2" />
+      <rect x="32.5" y="2"    width="3.5" height="36" rx="2" />
+      {/* Window border */}
+      <rect x="10" y="7"  width="18" height="2"  rx="1" />
+      <rect x="10" y="7"  width="2"  height="17" rx="1" />
+      <rect x="26" y="7"  width="2"  height="17" rx="1" />
+      <rect x="10" y="22" width="18" height="2"  rx="1" />
+      {/* Window glass */}
+      <rect x="12" y="9" width="14" height="13" rx="1" opacity="0.1" />
+      {/* Single centred toolhead body */}
+      <rect x="16" y="10" width="6" height="7" rx="1.5" opacity="0.8" />
+      {/* Nozzle tip */}
+      <path d="M16.5 17 L21.5 17 L19 20 Z" opacity="0.8" />
+      {/* Door handle */}
+      <rect x="29" y="13" width="2" height="8" rx="1" />
+      {/* Bottom control panel */}
+      <rect x="10" y="27" width="18" height="5" rx="1.5" opacity="0.35" />
+    </svg>
+  )
+}
+
 // ── Generic fallback ──────────────────────────────────────────────────────────
 function GenericIcon({ size }) {
   return (
@@ -163,10 +196,10 @@ function GenericIcon({ size }) {
 
 // ── Public component ──────────────────────────────────────────────────────────
 
-const ICONS = { A1: A1Icon, P1S: P1SIcon, P2S: P2SIcon, H2D: H2DIcon }
+const ICONS = { A1: A1Icon, P1S: P1SIcon, P2S: P2SIcon, H2D: H2DIcon, H2S: H2SIcon }
 
 /**
- * @param {string}  model      One of A1 | P1S | P2S | H2D
+ * @param {string}  model      One of A1 | P1S | P2S | H2D | H2S
  * @param {number}  size       Width/height in px (default 40)
  * @param {string}  className  Tailwind classes applied to the wrapping <span>
  */

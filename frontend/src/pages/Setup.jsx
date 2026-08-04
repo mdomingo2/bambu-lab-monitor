@@ -6,8 +6,8 @@ import { Dialog } from '../components/ui/Dialog'
 import { StatusBadge } from '../components/StatusBadge'
 import { BambuImportModal } from '../components/BambuImportModal'
 
-const MODELS = ['A1', 'P1S', 'P2S', 'H2D']
-const MODEL_LAN_DEFAULT = { A1: false, P1S: false, P2S: true, H2D: true }
+const MODELS = ['A1', 'P1S', 'P2S', 'H2D', 'H2S']
+const MODEL_LAN_DEFAULT = { A1: false, P1S: false, P2S: true, H2D: true, H2S: true }
 const EMPTY_FORM = { name: '', model: 'P1S', ip: '', serial: '', access_code: '', lan_mode: false }
 const EMPTY_USER_FORM = { username: '', password: '', role: 'admin' }
 

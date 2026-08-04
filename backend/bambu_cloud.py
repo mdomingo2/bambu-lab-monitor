@@ -95,10 +95,12 @@ _MODEL_MAP: dict[str, str] = {
     "BL-B002": "X1E",
     # H-series
     "BL-H001": "H2D",
+    "BL-H002": "H2S",   # unconfirmed dev code — model_label falls back to the
+                        # product name ("Bambu Lab H2S" → "H2S") if it is wrong
 }
 
 # Models we actually support in the farm monitor (shown in Setup dropdown)
-_SUPPORTED_MODELS = {"A1", "P1S", "P2S", "H2D"}
+_SUPPORTED_MODELS = {"A1", "P1S", "P2S", "H2D", "H2S"}
 
 # Models that default lan_mode=False (camera RTSP not supported)
 _LAN_MODE_OFF = {"A1", "A1 Mini", "P1P", "P1S"}

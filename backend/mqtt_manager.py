@@ -329,7 +329,7 @@ class PrinterConnection:
                     raw_trays = ams_unit.get("tray", [])
                     # Count raw tray entries (incl. empty slots) reported by
                     # the firmware — this gives the physical slot capacity.
-                    # H2D's single-slot AMS sends 1 entry; standard AMS sends 4.
+                    # A single-slot AMS HT sends 1 entry; standard AMS sends 4.
                     slot_count = len(raw_trays) if raw_trays else 4
                     units.append(AMSUnit(
                         unit_id=unit_idx,

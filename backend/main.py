@@ -592,7 +592,7 @@ async def undismiss_alert(printer_id: str, hms_code: str):
 # ── Timelapses ───────────────────────────────────────────────────────────────
 
 # Only these models support timelapse retrieval via FTPS.
-TIMELAPSE_MODELS = {"H2D", "P2S"}
+TIMELAPSE_MODELS = {"H2D", "H2S", "P2S"}
 
 
 def _require_timelapse_support(p) -> None:

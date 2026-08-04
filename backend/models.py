@@ -31,7 +31,7 @@ class Printer(SQLModel, table=True):
     """A Bambu Lab printer registered with the farm."""
     id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
     name: str
-    model: str          # A1 | P1S | P2S | H2D
+    model: str          # A1 | P1S | P2S | H2D | H2S
     ip: str
     serial: str
     access_code: str    # shown on printer screen under Settings → Network
@@ -189,7 +189,7 @@ class AMSUnit(BaseModel):
     unit_id: int
     humidity: int = 0    # 0–5 scale; 5 = driest / ideal
     temp: float = 0.0    # °C inside the AMS
-    slot_count: int = 4  # physical slot capacity (H2D AMS = 1, standard AMS = 4)
+    slot_count: int = 4  # physical slot capacity (AMS HT = 1, standard AMS = 4)
 
 
 class PrinterStatus(BaseModel):

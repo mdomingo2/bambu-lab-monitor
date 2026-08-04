@@ -21,4 +21,5 @@ export const MODEL_ACCENT = {
   P1S: 'border-t-brand-500',
   P2S: 'border-t-emerald-500',
   H2D: 'border-t-amber-500',
+  H2S: 'border-t-sky-500',
 }
