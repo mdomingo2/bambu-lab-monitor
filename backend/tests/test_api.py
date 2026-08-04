@@ -101,6 +101,34 @@ class TestPrinterCRUD:
         assert r.json()["lan_mode"] is True
 
 
+# ── Unknown-printer handling across every per-printer route ───────────────────
+
+class TestUnknownPrinter404:
+    """Every /api/printers/{id}/… route resolves the printer through the
+    get_printer_or_404 dependency.  Parametrising over the whole set means a
+    route added later without the dependency — and so silently operating on a
+    printer that does not exist — shows up here rather than in production.
+    """
+
+    GONE = "does-not-exist"
+
+    @pytest.mark.parametrize("method,path,payload", [
+        ("get",    "thumbnail",                      None),
+        ("get",    "thumbnail/debug",                None),
+        ("post",   "control",                        {"action": "pause"}),
+        ("post",   "light",                          {"mode": "on"}),
+        ("post",   "dismissed-alerts",               {"hms_code": "HMS_0500"}),
+        ("delete", "dismissed-alerts/HMS_0500",      None),
+        ("get",    "timelapses",                     None),
+        ("get",    "timelapses/video_1.mp4/download", None),
+    ])
+    def test_unknown_printer_returns_404(self, client, method, path, payload):
+        url = f"/api/printers/{self.GONE}/{path}"
+        r = client.post(url, json=payload) if payload else getattr(client, method)(url)
+        assert r.status_code == 404, f"{method.upper()} {path} returned {r.status_code}"
+        assert "not found" in r.text.lower()
+
+
 # ── Status endpoint ───────────────────────────────────────────────────────────
 
 class TestStatus:
