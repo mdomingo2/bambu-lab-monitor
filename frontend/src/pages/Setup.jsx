@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback } from 'react'
-import { PlusCircle, Pencil, Trash2, AlertCircle, Check, Video, CloudDownload, UserPlus, KeyRound, ShieldCheck, Eye, Cpu } from 'lucide-react'
+import { PlusCircle, Pencil, Trash2, Check, Video, CloudDownload, UserPlus, KeyRound, ShieldCheck, Eye, Cpu } from 'lucide-react'
 import { usePrinterStore } from '../store/printerStore'
 import { useAuthStore } from '../store/authStore'
 import { Dialog } from '../components/ui/Dialog'
+import { ErrorMessage } from '../components/ui/ErrorMessage'
 import { StatusBadge } from '../components/StatusBadge'
 import { BambuImportModal } from '../components/BambuImportModal'
 
@@ -17,16 +18,6 @@ async function apiRequest(url, options) {
     throw new Error(`${res.status}: ${text}`)
   }
   return res.status === 204 ? null : res.json()
-}
-
-function ErrorBanner({ error }) {
-  if (!error) return null
-  return (
-    <div className="mx-6 mt-4 flex items-start gap-2 bg-red-100 dark:bg-red-900/30 border border-red-300 dark:border-red-800 text-red-700 dark:text-red-300 rounded-lg px-3 py-2 text-sm">
-      <AlertCircle size={15} className="shrink-0 mt-0.5" />
-      <span>{error}</span>
-    </div>
-  )
 }
 
 // ---------------------------------------------------------------------------
@@ -54,7 +45,7 @@ function PrinterForm({ initial = EMPTY_FORM, printerTypes = [], onSave, onCancel
 
   return (
     <div className="flex flex-col gap-4">
-      <ErrorBanner error={error} />
+      <ErrorMessage message={error} className="mx-6 mt-4" />
       <div className="p-6 pt-4 flex flex-col gap-4">
         <div className="grid grid-cols-2 gap-4">
           <div>
@@ -198,12 +189,7 @@ function PrinterTypesSection({ types, onRefresh }) {
         </button>
       </div>
 
-      {error && (
-        <div className="mb-3 flex items-start gap-2 bg-red-100 dark:bg-red-900/30 border border-red-300 dark:border-red-800 text-red-700 dark:text-red-300 rounded-lg px-3 py-2 text-sm">
-          <AlertCircle size={14} className="shrink-0 mt-0.5" />
-          <span>{error}</span>
-        </div>
-      )}
+      <ErrorMessage message={error} className="mb-3" />
 
       <div className="flex flex-col divide-y divide-zinc-100 dark:divide-zinc-800">
         {types.map((t) => (
@@ -272,11 +258,7 @@ function PrinterTypesSection({ types, onRefresh }) {
             </label>
           </fieldset>
 
-          {error && (
-            <div className="flex items-start gap-2 bg-red-100 dark:bg-red-900/30 border border-red-300 dark:border-red-800 text-red-700 dark:text-red-300 rounded-lg px-3 py-2 text-sm">
-              <AlertCircle size={14} className="shrink-0 mt-0.5" /><span>{error}</span>
-            </div>
-          )}
+          <ErrorMessage message={error} />
 
           <div className="flex justify-end gap-3 pt-2 border-t border-zinc-200 dark:border-zinc-800">
             <button className="btn-ghost" onClick={() => setAddOpen(false)} disabled={saving}>Cancel</button>
@@ -454,12 +436,7 @@ function UsersSection({ currentUsername }) {
         </button>
       </div>
 
-      {error && (
-        <div className="mb-3 flex items-start gap-2 bg-red-100 dark:bg-red-900/30 border border-red-300 dark:border-red-800 text-red-700 dark:text-red-300 rounded-lg px-3 py-2 text-sm">
-          <AlertCircle size={14} className="shrink-0 mt-0.5" />
-          <span>{error}</span>
-        </div>
-      )}
+      <ErrorMessage message={error} className="mb-3" />
 
       {loading ? (
         <p className="text-sm text-zinc-400 py-2">Loading…</p>
@@ -538,11 +515,7 @@ function UsersSection({ currentUsername }) {
               <option value="viewer">Viewer — read-only</option>
             </select>
           </div>
-          {error && (
-            <div className="flex items-start gap-2 bg-red-100 dark:bg-red-900/30 border border-red-300 dark:border-red-800 text-red-700 dark:text-red-300 rounded-lg px-3 py-2 text-sm">
-              <AlertCircle size={14} className="shrink-0 mt-0.5" /><span>{error}</span>
-            </div>
-          )}
+          <ErrorMessage message={error} />
           <div className="flex justify-end gap-3 pt-2 border-t border-zinc-200 dark:border-zinc-800">
             <button className="btn-ghost" onClick={() => setAddOpen(false)} disabled={saving}>Cancel</button>
             <button className="btn-primary flex items-center gap-1.5" disabled={!addValid || saving} onClick={handleAdd}>
@@ -568,11 +541,7 @@ function UsersSection({ currentUsername }) {
               autoComplete="new-password"
             />
           </div>
-          {error && (
-            <div className="flex items-start gap-2 bg-red-100 dark:bg-red-900/30 border border-red-300 dark:border-red-800 text-red-700 dark:text-red-300 rounded-lg px-3 py-2 text-sm">
-              <AlertCircle size={14} className="shrink-0 mt-0.5" /><span>{error}</span>
-            </div>
-          )}
+          <ErrorMessage message={error} />
           <div className="flex justify-end gap-3 pt-2 border-t border-zinc-200 dark:border-zinc-800">
             <button className="btn-ghost" onClick={() => setResetUser(null)} disabled={saving}>Cancel</button>
             <button className="btn-primary flex items-center gap-1.5" disabled={!resetValid || saving} onClick={handleReset}>
@@ -601,11 +570,7 @@ function UsersSection({ currentUsername }) {
               <p className="text-xs text-red-500 mt-1">Passwords don't match</p>
             )}
           </div>
-          {error && (
-            <div className="flex items-start gap-2 bg-red-100 dark:bg-red-900/30 border border-red-300 dark:border-red-800 text-red-700 dark:text-red-300 rounded-lg px-3 py-2 text-sm">
-              <AlertCircle size={14} className="shrink-0 mt-0.5" /><span>{error}</span>
-            </div>
-          )}
+          <ErrorMessage message={error} />
           <div className="flex justify-end gap-3 pt-2 border-t border-zinc-200 dark:border-zinc-800">
             <button className="btn-ghost" onClick={() => setPwOpen(false)} disabled={saving}>Cancel</button>
             <button className="btn-primary flex items-center gap-1.5" disabled={!pwValid || saving} onClick={handleChangeOwnPassword}>

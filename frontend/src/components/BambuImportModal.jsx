@@ -9,8 +9,9 @@
  *   4. Done
  */
 import { useState } from 'react'
-import { AlertCircle, Check, ChevronRight, CloudDownload, Loader2, RefreshCw } from 'lucide-react'
+import { Check, ChevronRight, CloudDownload, Loader2, RefreshCw } from 'lucide-react'
 import { Dialog } from './ui/Dialog'
+import { ErrorMessage } from './ui/ErrorMessage'
 
 const MODELS = ['A1', 'A1 Mini', 'P1P', 'P1S', 'P2S', 'X1C', 'X1E', 'H2D', 'H2S']
 
@@ -55,7 +56,7 @@ function StepLogin({ onResult }) {
         and fill in their serial numbers and access codes.
       </p>
 
-      {error && <ErrorBox message={error} />}
+      <ErrorMessage message={error} />
 
       <div>
         <label className="label">Bambu Labs email</label>
@@ -135,7 +136,7 @@ function Step2FA({ tfaKey, email, password, onResult, onNewTfaKey }) {
       <p className="text-sm text-zinc-500 dark:text-zinc-400">
         A verification code was sent to your email. Enter it below.
       </p>
-      {error && <ErrorBox message={error} />}
+      <ErrorMessage message={error} />
       {resent && (
         <div className="flex items-center gap-2 bg-emerald-50 dark:bg-emerald-900/30 border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-400 rounded-lg px-3 py-2 text-sm">
           <Check size={14} className="shrink-0" />
@@ -237,7 +238,7 @@ function StepDevices({ token, onImport }) {
   if (error) {
     return (
       <div className="flex flex-col gap-4">
-        <ErrorBox message={error} />
+        <ErrorMessage message={error} />
         <button onClick={fetchDevices} className="btn-secondary self-start">Retry</button>
       </div>
     )
@@ -350,15 +351,6 @@ function StepDone({ count, onClose }) {
 }
 
 // ── Shared error box ──────────────────────────────────────────────────────────
-
-function ErrorBox({ message }) {
-  return (
-    <div className="flex items-start gap-2 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300 rounded-lg px-3 py-2 text-sm">
-      <AlertCircle size={15} className="shrink-0 mt-0.5" />
-      <span>{message}</span>
-    </div>
-  )
-}
 
 // ── Main modal ────────────────────────────────────────────────────────────────
 
