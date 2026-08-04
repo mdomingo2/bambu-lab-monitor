@@ -106,7 +106,22 @@ else
   echo "HOST_IP=${LOCAL_IP}" >> "${ENV_FILE}"
 fi
 
-# ── 8. Build and start the stack ────────────────────────────
+# ── 8. Seed the go2rtc config ───────────────────────────────
+# go2rtc.yaml is runtime state (go2rtc rewrites it as printer cameras are
+# registered), so it is not tracked in git.  Create it from the template on
+# first run and never clobber an existing one.
+GO2RTC_CFG="${APP_DIR}/go2rtc/go2rtc.yaml"
+
+if [[ -f "${GO2RTC_CFG}" ]]; then
+  info "go2rtc.yaml already present — leaving it as is."
+elif [[ -f "${GO2RTC_CFG}.example" ]]; then
+  info "Creating go2rtc.yaml from template…"
+  cp "${GO2RTC_CFG}.example" "${GO2RTC_CFG}"
+else
+  warn "go2rtc.yaml.example not found — go2rtc will start with defaults and cameras may not work."
+fi
+
+# ── 9. Build and start the stack ────────────────────────────
 info "Building Docker images (this takes a few minutes on first run)…"
 # Use sg to run docker in the docker group without a full re-login
 sg docker -c "docker compose -f '${APP_DIR}/docker-compose.yml' build"
@@ -114,7 +129,7 @@ sg docker -c "docker compose -f '${APP_DIR}/docker-compose.yml' build"
 info "Starting services…"
 sg docker -c "docker compose -f '${APP_DIR}/docker-compose.yml' up -d"
 
-# ── 9. Done ──────────────────────────────────────────────────
+# ── 10. Done ─────────────────────────────────────────────────
 echo ""
 echo -e "${GREEN}╔══════════════════════════════════════════════════════╗${NC}"
 echo -e "${GREEN}║        Bambu Lab Monitor installed successfully!      ║${NC}"

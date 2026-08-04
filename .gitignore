@@ -16,6 +16,10 @@ frontend/.vite/
 *.db-shm
 *.db-wal
 
+# go2rtc rewrites this file at runtime as the backend registers printer
+# cameras, so it is generated from go2rtc.yaml.example rather than tracked.
+go2rtc/go2rtc.yaml
+
 # Environment & secrets
 .env
 .env.*

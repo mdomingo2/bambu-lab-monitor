@@ -1,0 +1,175 @@
+"""
+Tests for the go2rtc stream-registration helpers in main.py.
+
+These helpers are AsyncMock-patched everywhere else (see conftest.py), so they
+need their own direct tests — a broken request here is invisible to the rest of
+the suite while producing "stream not found" in the browser.
+
+go2rtc's /api/streams handler reads *everything* from the query string:
+
+    query := r.URL.Query()
+    src := query.Get("src")
+    if src == "" && r.Method != "POST" {
+        api.ResponseJSON(w, streams)   // returns 200 + the stream list
+        return
+    }
+
+So a request without ?src= is answered with 200 OK and creates nothing.  That
+makes an omitted src indistinguishable from success unless we assert on the
+outgoing request, which is what these tests do.
+"""
+
+import httpx
+import pytest
+from unittest.mock import patch
+
+import main
+from models import Printer
+
+
+# conftest.py's session-scoped `client` fixture patches both helpers with
+# AsyncMock, and that patch stays active for the rest of the run once any test
+# has used the fixture.  Bind the real coroutines here instead: pytest imports
+# every test module during collection, before any fixture body executes, so
+# these names always point at the genuine implementation.
+_go2rtc_put = main._go2rtc_put
+_go2rtc_delete = main._go2rtc_delete
+
+
+PRINTER = Printer(
+    id="7e778f60-45ec-4ca3-8370-c8f30e779cd4",
+    name="Justin's H2S friend",
+    model="H2D",
+    ip="192.168.1.240",
+    serial="TESTSERIAL01",
+    access_code="a1b2c3d4",
+    lan_mode=True,
+)
+
+STREAM_NAME = f"bambu_{PRINTER.id}"
+EXPECTED_SRC = f"rtsps://bblp:{PRINTER.access_code}@{PRINTER.ip}:322/streaming/live/1"
+
+
+class _FakeResponse:
+    status_code = 200
+
+    def raise_for_status(self):
+        return None
+
+
+class _FakeClient:
+    """Records outgoing requests instead of dialling go2rtc."""
+
+    calls: list[httpx.Request] = []
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return False
+
+    def _record(self, method, url, **kwargs):
+        # Build a real httpx.Request so param encoding is exercised for real.
+        _FakeClient.calls.append(httpx.Request(method, url, **kwargs))
+        return _FakeResponse()
+
+    async def put(self, url, **kwargs):
+        return self._record("PUT", url, **kwargs)
+
+    async def delete(self, url, **kwargs):
+        return self._record("DELETE", url, **kwargs)
+
+
+@pytest.fixture
+def sent():
+    _FakeClient.calls = []
+    with patch("main.httpx.AsyncClient", _FakeClient):
+        yield _FakeClient.calls
+
+
+# ── PUT / register ────────────────────────────────────────────────────────────
+
+class TestGo2rtcPut:
+    @pytest.mark.asyncio
+    async def test_sends_src_as_query_param(self, sent):
+        """The RTSPS URL must arrive as ?src= — go2rtc ignores the body."""
+        await _go2rtc_put(PRINTER)
+        assert len(sent) == 1
+        assert sent[0].url.params.get("src") == EXPECTED_SRC
+
+    @pytest.mark.asyncio
+    async def test_sends_stream_name_as_query_param(self, sent):
+        await _go2rtc_put(PRINTER)
+        assert sent[0].url.params.get("name") == STREAM_NAME
+
+    @pytest.mark.asyncio
+    async def test_src_is_never_empty(self, sent):
+        """Regression: an empty ?src= makes go2rtc return the stream list
+        with 200 OK and register nothing at all."""
+        await _go2rtc_put(PRINTER)
+        assert sent[0].url.params.get("src", "") != ""
+
+    @pytest.mark.asyncio
+    async def test_does_not_send_a_request_body(self, sent):
+        """The old implementation put the URL in the body, where it was
+        silently discarded."""
+        await _go2rtc_put(PRINTER)
+        assert sent[0].content == b""
+
+    @pytest.mark.asyncio
+    async def test_targets_the_streams_endpoint(self, sent):
+        await _go2rtc_put(PRINTER)
+        assert sent[0].url.path == "/api/streams"
+        assert sent[0].method == "PUT"
+
+    @pytest.mark.asyncio
+    async def test_url_is_percent_encoded(self, sent):
+        """The raw query must be encoded so the rtsps:// URL survives intact."""
+        await _go2rtc_put(PRINTER)
+        raw = str(sent[0].url)
+        assert "rtsps%3A%2F%2F" in raw
+
+    @pytest.mark.asyncio
+    async def test_http_error_is_swallowed_but_logged(self, sent, caplog):
+        """A go2rtc outage must not break printer creation."""
+        with patch.object(
+            _FakeResponse,
+            "raise_for_status",
+            side_effect=httpx.HTTPStatusError("400", request=None, response=None),
+        ):
+            await _go2rtc_put(PRINTER)
+        assert "could not register" in caplog.text
+
+
+# ── DELETE / unregister ───────────────────────────────────────────────────────
+
+class TestGo2rtcDelete:
+    @pytest.mark.asyncio
+    async def test_identifies_stream_by_src_param(self, sent):
+        """go2rtc's DELETE branch keys off ?src=, so passing the stream name
+        as ?name= deletes nothing."""
+        await _go2rtc_delete(PRINTER.id)
+        assert len(sent) == 1
+        assert sent[0].url.params.get("src") == STREAM_NAME
+
+    @pytest.mark.asyncio
+    async def test_src_is_never_empty(self, sent):
+        await _go2rtc_delete(PRINTER.id)
+        assert sent[0].url.params.get("src", "") != ""
+
+    @pytest.mark.asyncio
+    async def test_targets_the_streams_endpoint(self, sent):
+        await _go2rtc_delete(PRINTER.id)
+        assert sent[0].url.path == "/api/streams"
+        assert sent[0].method == "DELETE"
+
+
+# ── Name agreement with the frontend ──────────────────────────────────────────
+
+def test_stream_name_matches_frontend_convention():
+    """CameraModal.jsx opens `?src=bambu_${printer.id}` — if these two ever
+    diverge the browser gets 'stream not found' for every printer."""
+    assert STREAM_NAME == f"bambu_{PRINTER.id}"
