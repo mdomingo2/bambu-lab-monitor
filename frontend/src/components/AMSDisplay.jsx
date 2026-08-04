@@ -8,6 +8,9 @@ const DEFAULT_SLOTS = 4  // fallback for units with no slot_count
  * H2D has two single-slot AMS units (one per nozzle) plus an
  * optional high-temperature AMS (unit_id 2) labelled "AMS-HT".
  * All other printers fall back to generic "AMS {n}" labelling.
+ *
+ * The H2S is deliberately absent: it is the single-nozzle H2, so it has no
+ * left/right nozzle pairing and its units are plain "AMS 1..n".
  */
 const UNIT_LABELS = {
   H2D: ['Right AMS', 'Left AMS', 'AMS-HT'],
@@ -16,6 +19,7 @@ const UNIT_LABELS = {
 /**
  * Per-model display order of unit_ids.
  * H2D: show Left (unit 1), then Right (unit 0), then HT (unit 2).
+ * Models without an entry here keep the firmware's natural order.
  */
 const UNIT_ORDER = {
   H2D: [1, 0, 2],

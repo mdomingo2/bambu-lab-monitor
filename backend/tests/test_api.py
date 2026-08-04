@@ -6,6 +6,7 @@ Database is in-memory and reset between tests.
 """
 
 import pytest
+from unittest.mock import patch
 
 PRINTER_PAYLOAD = {
     "name": "Test P1S",
@@ -306,3 +307,44 @@ class TestUserManagement:
     def test_admin_reset_password_unknown_user_returns_404(self, client):
         r = client.patch("/api/users/nobody/password", json={"new_password": "validpassword"})
         assert r.status_code == 404
+
+
+# ── Timelapse model gating ────────────────────────────────────────────────────
+
+class TestTimelapseModelGate:
+    """Timelapse retrieval over FTPS is only offered on models that store
+    timelapses on the SD card — see TIMELAPSE_MODELS in main.py."""
+
+    def _printer(self, client, model):
+        payload = {**PRINTER_PAYLOAD, "model": model, "serial": f"SN{model}"}
+        return client.post("/api/printers", json=payload).json()["id"]
+
+    @pytest.mark.parametrize("model", ["H2D", "H2S", "P2S"])
+    def test_supported_models_reach_the_ftps_layer(self, client, model):
+        """The gate must let these through to the SD-card listing. ftps is
+        mocked so the test never dials a real printer."""
+        pid = self._printer(client, model)
+        listing = ["/timelapse/video_2.mp4", "/timelapse/video_1.mp4", "/timelapse/notes.txt"]
+        with patch("main.ftps.list_dir", return_value=listing) as list_dir:
+            r = client.get(f"/api/printers/{pid}/timelapses")
+        assert r.status_code == 200
+        # Non-video entries dropped, newest first
+        assert r.json()["files"] == ["video_2.mp4", "video_1.mp4"]
+        assert list_dir.called
+
+    @pytest.mark.parametrize("model", ["H2D", "H2S", "P2S"])
+    def test_supported_models_are_never_gated_out(self, client, model):
+        pid = self._printer(client, model)
+        with patch("main.ftps.list_dir", return_value=[]):
+            r = client.get(f"/api/printers/{pid}/timelapses")
+        assert "not supported" not in r.text
+
+    @pytest.mark.parametrize("model", ["A1", "P1S"])
+    def test_unsupported_models_return_404(self, client, model):
+        """Rejected before any FTPS connection is attempted."""
+        pid = self._printer(client, model)
+        with patch("main.ftps.list_dir") as list_dir:
+            r = client.get(f"/api/printers/{pid}/timelapses")
+        assert r.status_code == 404
+        assert "not supported" in r.text
+        assert not list_dir.called

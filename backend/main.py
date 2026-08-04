@@ -69,23 +69,42 @@ _print_sessions: dict[str, str] = {}
 # ---------------------------------------------------------------------------
 
 async def _go2rtc_put(printer: Printer) -> None:
-    """Register or update a printer's RTSPS stream in go2rtc."""
+    """Register or update a printer's RTSPS stream in go2rtc.
+
+    go2rtc takes the stream source from the *query string* (?src=), never from
+    the request body.  Its handler short-circuits on an empty ?src= and returns
+    the full stream list with 200 OK, so a body-only request silently creates
+    nothing while still looking like a success.  Both params are required:
+        PUT /api/streams?name=<stream name>&src=<rtsps url>
+    """
     name = f"bambu_{printer.id}"
     url = f"rtsps://bblp:{printer.access_code}@{printer.ip}:322/streaming/live/1"
     try:
         async with httpx.AsyncClient(timeout=3) as client:
-            await client.put(f"{GO2RTC_URL}/api/streams?name={name}", content=url)
+            resp = await client.put(
+                f"{GO2RTC_URL}/api/streams",
+                params={"name": name, "src": url},
+            )
+            resp.raise_for_status()
         logger.info(f"go2rtc: registered {printer.name!r} as {name}")
     except Exception as exc:
         logger.warning(f"go2rtc: could not register {printer.name!r}: {exc}")
 
 
 async def _go2rtc_delete(printer_id: str) -> None:
-    """Remove a printer's stream from go2rtc."""
+    """Remove a printer's stream from go2rtc.
+
+    DELETE identifies the stream by ?src= — go2rtc uses that param as the key
+    into its stream map here, so ?name= is ignored and deletes nothing.
+    """
     name = f"bambu_{printer_id}"
     try:
         async with httpx.AsyncClient(timeout=3) as client:
-            await client.delete(f"{GO2RTC_URL}/api/streams?name={name}")
+            resp = await client.delete(
+                f"{GO2RTC_URL}/api/streams",
+                params={"src": name},
+            )
+            resp.raise_for_status()
         logger.info(f"go2rtc: removed {name}")
     except Exception as exc:
         logger.warning(f"go2rtc: could not remove {name}: {exc}")

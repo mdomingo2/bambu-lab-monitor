@@ -1,0 +1,39 @@
+# go2rtc configuration template.
+#
+# install.sh copies this to go2rtc.yaml on first run.  The live go2rtc.yaml is
+# NOT tracked in git because go2rtc rewrites it at runtime: the backend
+# registers each printer's camera via PUT /api/streams, and go2rtc persists
+# every stream it is given back into this file.
+#
+# That means the `streams:` block below is intentionally empty — the backend is
+# the source of truth for it and re-registers every printer on startup
+# (see _go2rtc_put in backend/main.py).  Do not hand-write printer streams
+# here; add the printer in the web UI instead.
+
+api:
+  listen: :1984
+  origin: '*'
+
+log:
+  level: debug
+
+rtsp:
+  listen: :8554
+
+# Populated at runtime by the backend — one entry per printer, named
+# bambu_<printer id>, pointing at rtsps://bblp:<access code>@<ip>:322/...
+streams: {}
+
+webrtc:
+  ice_servers:
+  - urls:
+    - stun:stun.l.google.com:19302
+    - stun:stun1.l.google.com:19302
+  listen: :8555/tcp
+  # HOST_IP must be the LAN IP of the machine running Docker (e.g. 192.168.1.50).
+  # The browser uses this address to connect for the video/audio stream.
+  # Set HOST_IP in a .env file next to docker-compose.yml and it will be
+  # substituted here automatically.  On a Raspberry Pi the install.sh script
+  # detects and writes this value for you.
+  candidates:
+    - ${HOST_IP}:8555

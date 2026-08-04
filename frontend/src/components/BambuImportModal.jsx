@@ -12,7 +12,7 @@ import { useState } from 'react'
 import { AlertCircle, Check, ChevronRight, CloudDownload, Loader2, RefreshCw } from 'lucide-react'
 import { Dialog } from './ui/Dialog'
 
-const MODELS = ['A1', 'A1 Mini', 'P1P', 'P1S', 'P2S', 'X1C', 'X1E', 'H2D']
+const MODELS = ['A1', 'A1 Mini', 'P1P', 'P1S', 'P2S', 'X1C', 'X1E', 'H2D', 'H2S']
 
 async function api(path, body) {
   const r = await fetch(path, {

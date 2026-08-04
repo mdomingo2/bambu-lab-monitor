@@ -9,7 +9,7 @@ Strategy waterfall (stops at first hit):
   0.  Cloud print with plate_N.gcode path → fetch plate_N.png from SD card.
   0b. Named cloud print → look for <subtask_name>.gcode.3mf at SD root.
   1a. Subtask/gcode name ends in .3mf → direct download from /cache/ or /.
-  1b. Job-title .gcode.3mf at SD root (P2S / H2D LAN prints).
+  1b. Job-title .gcode.3mf at SD root (P2S / H2D / H2S LAN prints).
   2.  List all .3mf files on SD card newest-first, try each for an embedded PNG.
   3.  gcode_file path is itself a .3mf.
   4.  Explicit cover_file path from MQTT (pre-rendered JPEG/PNG).
@@ -75,7 +75,7 @@ def _list_3mf(ip: str, access_code: str) -> list[str]:
     """Return .3mf paths from the printer SD card, newest-first when MDTM works.
 
     Model differences:
-      P2S / H2D: .gcode.3mf files at FTP root, returned as /name.gcode.3mf
+      P2S / H2x: .gcode.3mf files at FTP root, returned as /name.gcode.3mf
       A1  / P1S: .3mf files inside /cache/, returned as bare names by nlst
 
     The /cache/ listing is capped at 20 to avoid iterating 400+ files on
@@ -204,7 +204,7 @@ def fetch_sync(
                         logger.info(f"[thumbnail] hit via strategy 1a: {path}")
                         return _store(img)
 
-    # ── Strategy 1b: job-title .gcode.3mf at SD root (P2S / H2D) ───────────
+    # ── Strategy 1b: job-title .gcode.3mf at SD root (P2S / H2D / H2S) ────
     if subtask_name and not subtask_name.lower().endswith(".3mf"):
         for ext in (".gcode.3mf", ".3mf"):
             raw = ftps.download(ip, access_code, f"/{subtask_name}{ext}", timeout=20)

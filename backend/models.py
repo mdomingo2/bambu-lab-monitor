@@ -205,7 +205,7 @@ class AMSUnit(BaseModel):
     unit_id: int
     humidity: int = 0    # 0–5 scale; 5 = driest / ideal
     temp: float = 0.0    # °C inside the AMS
-    slot_count: int = 4  # physical slot capacity (H2D AMS = 1, standard AMS = 4)
+    slot_count: int = 4  # physical slot capacity (AMS HT = 1, standard AMS = 4)
 
 
 class PrinterStatus(BaseModel):

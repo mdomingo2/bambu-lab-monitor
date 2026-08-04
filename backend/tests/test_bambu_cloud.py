@@ -230,6 +230,24 @@ class TestGetDevices:
             devices = bc.get_devices("token")
         assert devices[0].model_label == "X999"
 
+    def test_h2s_falls_back_to_product_name_if_dev_code_differs(self):
+        """BL-H002 is an unconfirmed code — an H2S reporting anything else must
+        still resolve to "H2S" via the product-name fallback."""
+        resp = _make_response(200, {
+            "devices": [{
+                "dev_id": "01H00S111111",
+                "name": "Justin's H2S friend",
+                "dev_model_name": "BL-H999",
+                "dev_product_name": "Bambu Lab H2S",
+                "dev_access_code": "12345678",
+                "online": True,
+            }]
+        })
+        with patch("bambu_cloud.httpx.get", return_value=resp):
+            devices = bc.get_devices("token")
+        assert devices[0].model_label == "H2S"
+        assert devices[0].lan_mode_default is True
+
     def test_skips_malformed_devices(self):
         resp = _make_response(200, {
             "devices": [
@@ -259,6 +277,7 @@ class TestGetDevices:
             "BL-B001": "X1C",
             "BL-B002": "X1E",
             "BL-H001": "H2D",
+            "BL-H002": "H2S",
         }
         for code, expected in cases.items():
             d = bc.BambuDevice(
@@ -270,9 +289,9 @@ class TestGetDevices:
             assert d.model_label == expected, f"{code} should map to {expected}"
 
     def test_lan_mode_defaults(self):
-        """LAN mode off for A1/A1 Mini/P1P/P1S; on for P2S/H2D/X1C/X1E."""
+        """LAN mode off for A1/A1 Mini/P1P/P1S; on for P2S/H2D/H2S/X1C/X1E."""
         off_models = ["BL-A001", "BL-A002", "BL-P001", "BL-P002"]
-        on_models  = ["BL-P003", "BL-H001", "BL-B001", "BL-B002"]
+        on_models  = ["BL-P003", "BL-H001", "BL-H002", "BL-B001", "BL-B002"]
 
         for code in off_models:
             d = bc.BambuDevice(dev_id="X", name="T", dev_model_name=code,

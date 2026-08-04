@@ -145,6 +145,30 @@ Check logs with `docker compose -C ~/bambu-lab-monitor logs backend`.
 Make sure port `8555` (WebRTC media) is reachable from your browser's machine.
 If you are on the same LAN this should work automatically.
 
+**One camera says "stream not found"**
+
+That error comes from go2rtc and means no stream is registered for that printer.
+The backend registers every printer's camera on startup and whenever a printer is
+added or edited, so restarting the backend usually fixes it:
+
+```bash
+docker compose -C ~/bambu-lab-monitor restart backend
+```
+
+Confirm the stream exists — there should be one `bambu_<printer id>` entry per
+printer:
+
+```bash
+curl -s http://localhost:1984/api/streams | python3 -m json.tool
+```
+
+If a printer is missing, check `docker compose logs backend | grep go2rtc` for a
+`could not register` warning.
+
+`go2rtc/go2rtc.yaml` is runtime state, not configuration you edit by hand — go2rtc
+rewrites it as streams are registered, which is why it is gitignored and generated
+from `go2rtc.yaml.example`. Printer streams belong in the web UI, not in that file.
+
 **Out of disk space**
 
 The SD card fills up if old Docker images accumulate. Clean up with:
