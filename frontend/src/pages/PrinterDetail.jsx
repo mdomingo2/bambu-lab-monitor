@@ -46,7 +46,7 @@ const NOZZLE_TYPE_LABELS = {
  * endpoint returns 404 (non-fast-start file or ffmpeg unavailable) the card
  * falls back gracefully to a Film icon placeholder so the layout stays intact.
  */
-function TimelapseCard({ printerId, filename }) {
+export function TimelapseCard({ printerId, filename }) {
   const [thumbError, setThumbError] = useState(false)
 
   const thumbUrl    = `/api/printers/${printerId}/timelapses/${encodeURIComponent(filename)}/thumb`
@@ -92,7 +92,7 @@ function TimelapseCard({ printerId, filename }) {
 }
 
 /** A labelled stat block used in the stats grid. */
-function StatBlock({ icon: Icon, label, value, sub, warn }) {
+export function StatBlock({ icon: Icon, label, value, sub, warn }) {
   return (
     <div className="card p-4 flex flex-col gap-1">
       <div className="flex items-center gap-1.5 text-xs text-zinc-400 mb-1">

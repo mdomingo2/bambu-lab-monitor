@@ -24,7 +24,7 @@ async function apiRequest(url, options) {
 // Printer form
 // ---------------------------------------------------------------------------
 
-function PrinterForm({ initial = EMPTY_FORM, printerTypes = [], onSave, onCancel, saving, error }) {
+export function PrinterForm({ initial = EMPTY_FORM, printerTypes = [], onSave, onCancel, saving, error }) {
   const firstType = printerTypes[0]?.name ?? ''
   const [form, setForm] = useState(() => ({
     ...initial,
@@ -134,7 +134,7 @@ function PrinterForm({ initial = EMPTY_FORM, printerTypes = [], onSave, onCancel
 // Printer types section
 // ---------------------------------------------------------------------------
 
-function PrinterTypesSection({ types, onRefresh }) {
+export function PrinterTypesSection({ types, onRefresh }) {
   const [addOpen, setAddOpen]   = useState(false)
   const [form, setForm]         = useState(EMPTY_TYPE_FORM)
   const [saving, setSaving]     = useState(false)
@@ -291,7 +291,7 @@ function PrinterTypesSection({ types, onRefresh }) {
 // Role badge
 // ---------------------------------------------------------------------------
 
-function RoleBadge({ role }) {
+export function RoleBadge({ role }) {
   if (role === 'admin') {
     return (
       <span className="inline-flex items-center gap-1 text-xs font-medium px-1.5 py-0.5 rounded bg-navy-800 text-white dark:bg-steel-200 dark:text-navy-900">
@@ -310,7 +310,7 @@ function RoleBadge({ role }) {
 // User management section
 // ---------------------------------------------------------------------------
 
-function UsersSection({ currentUsername }) {
+export function UsersSection({ currentUsername }) {
   const [users, setUsers]           = useState([])
   const [loading, setLoading]       = useState(true)
   const [addOpen, setAddOpen]       = useState(false)
