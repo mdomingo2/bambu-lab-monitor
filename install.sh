@@ -106,10 +106,29 @@ else
   echo "HOST_IP=${LOCAL_IP}" >> "${ENV_FILE}"
 fi
 
+# Tailscale address, advertised as a second WebRTC candidate so the camera
+# also works when the UI is reached over the tailnet.  Falls back to the LAN
+# IP when Tailscale is not installed, which just yields a duplicate candidate.
+TS_ADDR=$(tailscale ip -4 2>/dev/null | head -1 || true)
+[[ -z "${TS_ADDR}" ]] && TS_ADDR="${LOCAL_IP}"
+
+if grep -q "^TS_IP=" "${ENV_FILE}" 2>/dev/null; then
+  EXISTING_TS=$(grep "^TS_IP=" "${ENV_FILE}" | cut -d= -f2)
+  if [[ "${EXISTING_TS}" != "${TS_ADDR}" ]]; then
+    info "Updating TS_IP in .env: ${EXISTING_TS} → ${TS_ADDR}"
+    sed -i "s|^TS_IP=.*|TS_IP=${TS_ADDR}|" "${ENV_FILE}"
+  fi
+else
+  info "Writing TS_IP=${TS_ADDR} to .env"
+  echo "TS_IP=${TS_ADDR}" >> "${ENV_FILE}"
+fi
+
 # ── 8. Seed the go2rtc config ───────────────────────────────
-# go2rtc.yaml is runtime state (go2rtc rewrites it as printer cameras are
-# registered), so it is not tracked in git.  Create it from the template on
-# first run and never clobber an existing one.
+# go2rtc.yaml holds host-specific addresses, so it is not tracked in git.
+# Its streams: block stays empty by design — the backend registers every
+# printer at startup and reconciles each minute, so the database is the
+# source of truth.  Create it from the template on first run and never
+# clobber an existing one.
 GO2RTC_CFG="${APP_DIR}/go2rtc/go2rtc.yaml"
 
 if [[ -f "${GO2RTC_CFG}" ]]; then

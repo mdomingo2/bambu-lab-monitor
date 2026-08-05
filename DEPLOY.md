@@ -165,44 +165,63 @@ curl -s http://localhost:1984/api/streams | python3 -m json.tool
 If a printer is missing, check `docker compose logs backend | grep go2rtc` for a
 `could not register` warning.
 
-`go2rtc/go2rtc.yaml` is runtime state, not configuration you edit by hand — go2rtc
-rewrites it as streams are registered, which is why it is gitignored and generated
-from `go2rtc.yaml.example`. Printer streams belong in the web UI, not in that file.
+`go2rtc/go2rtc.yaml` holds host-specific addresses, which is why it is gitignored
+and generated from `go2rtc.yaml.example`. Its `streams:` block is **intentionally
+empty** — the database is the source of truth. The backend registers every printer
+at startup and re-checks once a minute, so go2rtc is repopulated within a minute of
+any restart. Add printers in the web UI, never in that file.
+
+**"Camera unavailable — WebRTC connection failed"**
+
+Almost always a wrong address in `.env`, not a broken printer. The page itself
+loads over HTTP, but the *video* is a direct browser→Pi connection to port 8555,
+and go2rtc has to advertise an address the browser can actually reach.
+
+`HOST_IP` and `TS_IP` are DHCP/tailnet leases. When the Pi's address moves, go2rtc
+keeps offering the old one and every camera fails at once — while the UI keeps
+working, which makes it look like a printer problem. Check them against reality:
+
+```bash
+ip route get 1.1.1.1 | head -1     # actual LAN IP
+tailscale ip -4                    # actual tailnet IP
+grep -E '^(HOST_IP|TS_IP)=' ~/bambu-lab-monitor/.env
+```
+
+Fix `.env` if they disagree, then `docker compose restart go2rtc`. Confirm what
+go2rtc now offers — you should see one `typ host` candidate per address:
+
+```bash
+docker compose logs go2rtc | grep -i candidate
+```
+
+If every camera fails, suspect the addresses. If only one fails, suspect that
+printer (powered off, or LAN Mode disabled on its screen).
 
 **`could not register ... 400 Bad Request` on every backend start**
 
-Expected on go2rtc 1.9.14, and harmless. go2rtc cannot patch a stream key it
-loaded from its own config file: the PUT returns
-`400 yaml: line N: did not find expected key`, pointing at the `streams:` node.
-The stream is still applied in memory, so cameras work — only the write-back to
-disk is skipped. Registrations for *new* printers (keys not yet in the file)
-return 200 and do persist.
+Expected on go2rtc 1.9.14, and harmless — logged at INFO as `applied … write-back
+skipped`. go2rtc cannot patch a stream key it loaded from its own config file: the
+PUT returns `400 yaml: line N: did not find expected key`. The stream is still
+applied in memory, so cameras work.
 
-The practical consequence: if you change a printer's IP or access code, go2rtc's
-memory updates but `go2rtc.yaml` keeps the old value. Restarting the backend
-re-applies the correct value, so cameras recover on their own. It only bites if
-go2rtc restarts *without* the backend — it then loads the stale URL from disk.
-Restart the backend to fix it:
+Keeping `streams:` empty means that write path is barely exercised, which is
+deliberate. **Never populate the file and never work around this with
+DELETE-then-PUT.** go2rtc's append-after-delete writes malformed YAML: it appends
+the new URL to the *preceding* stream's producer list and writes the new key at the
+wrong indentation. That gives one printer a second producer pointing at another
+printer's camera — you get the wrong printer's video — and the broken indentation
+makes every later write-back fail silently.
 
-```bash
-docker compose -C ~/bambu-lab-monitor restart backend
-```
-
-**Do not work around this with DELETE-then-PUT.** go2rtc's append-after-delete
-writes malformed YAML: it appends the new URL to the *preceding* stream's
-producer list and writes the new key at the wrong indentation. That gives one
-printer a second producer pointing at another printer's camera, and the broken
-indentation then makes every later write-back fail — which is how a config ends
-up silently stale in the first place.
-
-To rebuild the file from the database as the source of truth, regenerate the
-`streams:` block, keeping one two-space-indented `- rtsps://…` line per printer,
-then restart go2rtc and the backend and confirm each stream has exactly one
-producer:
+If the file ever does acquire a `streams:` block, reset it rather than repairing
+it, and let the backend repopulate:
 
 ```bash
+# set `streams: {}` in go2rtc/go2rtc.yaml, then:
+docker compose restart go2rtc backend
 curl -s http://localhost:1984/api/streams | python3 -m json.tool
 ```
+
+Each stream must have exactly one producer. Two is the cross-wiring bug above.
 
 **Out of disk space**
 

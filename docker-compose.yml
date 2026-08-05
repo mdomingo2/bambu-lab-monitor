@@ -17,6 +17,11 @@ services:
       #   echo "HOST_IP=192.168.1.50" > .env
       # The install.sh script on Raspberry Pi sets this automatically.
       - HOST_IP=${HOST_IP:-127.0.0.1}
+      # TS_IP: Tailscale address of this host, advertised as a second ICE
+      # candidate so the camera also works when the UI is reached over the
+      # tailnet.  Falls back to HOST_IP when there is no tailnet, which just
+      # yields a harmless duplicate candidate.
+      - TS_IP=${TS_IP:-${HOST_IP:-127.0.0.1}}
     restart: unless-stopped
 
   backend:
