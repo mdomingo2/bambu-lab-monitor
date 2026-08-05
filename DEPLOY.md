@@ -197,6 +197,25 @@ docker compose logs go2rtc | grep -i candidate
 If every camera fails, suspect the addresses. If only one fails, suspect that
 printer (powered off, or LAN Mode disabled on its screen).
 
+`deploy/sync-host-ip.sh` guards against this automatically. Run from cron every
+five minutes, it compares the Pi's real LAN and tailnet addresses against `.env`
+and, on a mismatch, updates it, recreates go2rtc, and restarts the backend so
+streams re-register immediately:
+
+```bash
+*/5 * * * * /home/mike/bambu-lab-monitor/deploy/sync-host-ip.sh >> /home/mike/bambu-lab-monitor/deploy/sync-host-ip.log 2>&1
+```
+
+It is silent unless it acts; `deploy/sync-host-ip.log` is the record of every
+address change. With a static DHCP reservation it should never fire — it exists
+for the case where the reservation is lost or the Pi moves networks. It updates
+`CERT_HOSTS` but deliberately does **not** reissue the certificate: doing so
+unattended would invalidate the cert every device has already trusted.
+
+Note that containers read `.env` only when they are **created**. `docker compose
+restart` reuses the old environment — use `up -d` after changing `.env`, or the
+change appears to be ignored.
+
 **`could not register ... 400 Bad Request` on every backend start**
 
 Expected on go2rtc 1.9.14, and harmless — logged at INFO as `applied … write-back

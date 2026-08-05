@@ -40,3 +40,6 @@ Thumbs.db
 # TLS certs & runtime files (private key must never be committed)
 certs/
 host_arp
+
+# Runtime log from deploy/sync-host-ip.sh
+deploy/sync-host-ip.log
